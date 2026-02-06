@@ -9,7 +9,17 @@ import uuid
 class TestPublisher(Node):
     def __init__(self):
         super().__init__('test_publisher')
-        self.publisher_ = self.create_publisher(RobotMessage, 'robot_test_topic', 10)
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.VOLATILE
+        )
+        self.publisher_ = self.create_publisher(
+            RobotMessage, 
+            'robot_test_topic', 
+            qos_profile
+        )
         self.timer = self.create_timer(1.0, self.timer_callback)  # 1초마다 발행
         self.count = 0
         self.get_logger().info('테스트 Publisher 시작!')
