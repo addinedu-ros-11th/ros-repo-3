@@ -24,6 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'test_publisher = malle_controller.test_publisher:main',
+            'test_subscriber = malle_controller.test_subscriber:main',
         ],
     },
 )
