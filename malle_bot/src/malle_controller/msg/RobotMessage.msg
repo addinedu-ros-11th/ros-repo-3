@@ -1,0 +1,5 @@
+MessageHeader header
+float32 battery
+string robot_status
+string command
+string error_message

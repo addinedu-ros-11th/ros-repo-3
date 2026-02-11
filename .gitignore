@@ -1,3 +1,8 @@
+# Colcon build artifacts
+malle_bot/build/
+malle_bot/install/
+malle_bot/log/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
