@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from malle_controller.msg import RobotMessage, MessageHeader
 import time
 import uuid
@@ -32,7 +33,7 @@ class TestPublisher(Node):
         current_time = time.time()
         msg.header.timestamp_sec = int(current_time)
         msg.header.timestamp_nsec = int((current_time % 1) * 1e9)
-        msg.header.robot_id = "robot_001"
+        msg.header.robot_id = "connect_test"
         msg.header.message_type = "status"
         msg.header.priority = 1
         msg.header.sequence = self.count
