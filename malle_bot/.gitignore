@@ -1,1 +1,4 @@
-src/pinky_pro/
+build
+install
+log
+src/pinky_pro
