@@ -1,6 +1,34 @@
-# malle_service/config.py
+"""Configuration loaded from environment variables."""
 
 from pydantic_settings import BaseSettings
+
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env from config/ directory
+_env_file = Path(__file__).parent.parent.parent / "config" / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+
+# --- Database ---
+DB_URL: str = os.getenv(
+    "DB_URL",
+    "mysql+aiomysql://root:password@localhost:3306/malle",
+)
+
+# --- CORS ---
+CORS_ORIGINS: list[str] = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8001",
+).split(",")
+
+# --- Internal services ---
+AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://localhost:5000")
+
+# --- Server ---
+HOST: str = os.getenv("HOST", "0.0.0.0")
+PORT: int = int(os.getenv("PORT", "8000"))
 
 class Config(BaseSettings):
     BATTERY_THRESHOLD: int = 20  # 최소 배터리 %
@@ -11,3 +39,4 @@ class Config(BaseSettings):
     
     class Config:
         env_file = ".env"
+
