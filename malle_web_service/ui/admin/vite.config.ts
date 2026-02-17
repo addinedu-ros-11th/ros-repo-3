@@ -4,9 +4,10 @@ import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
+  base: mode === "production" ? "/admin/" : "/",
   server: {
     host: "::",
-    port: 8080,
+    port: 3002,
     hmr: {
       overlay: false,
     },
