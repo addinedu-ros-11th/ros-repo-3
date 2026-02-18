@@ -10,9 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import CORS_ORIGINS
 from app.database import engine, Base
-from app.models_완료 import *  # noqa: F401,F403  — register all models
+from app.models import *  # noqa: F401,F403  — register all models
 
-from app.routers_완료 import sessions, robots, guide, pickup, lockbox, missions, zones, events, pois, stores, shopping, teleop
+from app.routers import sessions, robots, guide, pickup, lockbox, missions, zones, events, pois, stores, shopping, teleop
 from app.ws.manager import ws_router
 
 
