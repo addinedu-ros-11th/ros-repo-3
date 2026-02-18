@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -13,8 +14,20 @@ import { MapPage } from "@/pages/MapPage";
 import { LockboxPage } from "@/pages/LockboxPage";
 import { SearchPage } from "@/pages/SearchPage";
 import NotFound from "./pages/NotFound";
+import { useRobotStore } from "@/stores/robotStore";
+import { useWsHandler } from "@/ws/useWsHandler";
 
 const queryClient = new QueryClient();
+
+/** WS 연결을 담당하는 내부 컴포넌트 */
+function RobotInit() {
+  const robotId = useRobotStore((s) => s.robot.id);
+
+  // 로봇은 항상 WS 연결 (robotId는 고정)
+  useWsHandler(robotId);
+
+  return null;
+}
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -22,6 +35,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <RobotInit />
         <Routes>
           <Route element={<RobotLayout />}>
             <Route path="/" element={<HomePage />} />
