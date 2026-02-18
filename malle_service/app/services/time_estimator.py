@@ -1,108 +1,85 @@
 # malle_service/services/time_estimator.py
-#TODO
 
-from sqlalchemy.orm import Session as DBSession
-from datetime import datetime, timedelta
 import math
+from datetime import datetime, timedelta
 
-from models import Robot, Session, GuideQueue, GuideQueueItem, POI
-from config import Config
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-class TimeEstimatorService:
-    
-    def __init__(self, config: Config):
-        self.avg_speed = config.AVG_ROBOT_SPEED_M_PER_SEC
-        self.poi_stop_time = config.POI_STOP_TIME_SEC
-    
-    def calculate_session_completion_time(
-        self,
-        db: DBSession,
-        session: Session
-    ) -> datetime:
-        
-        # 1. 가이드 큐 조회
-        guide_queue = db.query(GuideQueue).filter(
-            GuideQueue.session_id == session.id
-        ).first()
-        
-        if not guide_queue:
-            return datetime.now()
-        
-        queue_items = db.query(GuideQueueItem).filter(
-            GuideQueueItem.queue_id == guide_queue.id
-        ).order_by(GuideQueueItem.seq).all()
-        
-        if not queue_items:
-            return datetime.now()
-        
-        # 2. POI 좌표 가져오기
-        poi_ids = [item.poi_id for item in queue_items]
-        pois = db.query(POI).filter(POI.id.in_(poi_ids)).all()
-        poi_map = {poi.id: poi for poi in pois}
-        
-        # 3. 로봇 현재 위치
-        robot = session.assigned_robot
-        if not robot:
-            return datetime.now()
-        
-        current_x = robot.last_x
-        current_y = robot.last_y
-        
-        # 4. 경로 거리 계산
-        total_distance = self._calculate_route_distance(
-            start_x=current_x,
-            start_y=current_y,
-            queue_items=queue_items,
-            poi_map=poi_map
+from app.models.guide import GuideQueueItem, GuideItemStatus
+from app.models.poi import Poi
+from app.models.robot import RobotStateCurrent
+
+AVG_ROBOT_SPEED_M_PER_SEC = 0.5  # 평균 속도 (m/s)
+POI_STOP_TIME_SEC = 30  # POI당 정지 시간 (초)
+
+
+async def estimate_session_completion(
+    db: AsyncSession,
+    session_id: int,
+    robot_id: int,
+) -> datetime:
+    """
+    가이드큐 기반 세션 예상 완료시간 계산.
+
+    1. 해당 세션의 PENDING 가이드큐 아이템 조회
+    2. 로봇 현재 위치 → 첫 POI → ... → 마지막 POI 경로 거리 합산
+    3. 거리/속도 + POI수×정지시간 = 예상 소요시간
+    """
+    # 1. PENDING 가이드큐 아이템 + POI 좌표
+    result = await db.execute(
+        select(GuideQueueItem, Poi)
+        .join(Poi, GuideQueueItem.poi_id == Poi.id)
+        .where(
+            GuideQueueItem.session_id == session_id,
+            GuideQueueItem.is_active == True,
+            GuideQueueItem.status == GuideItemStatus.PENDING,
         )
-        
-        # 5. 시간 계산
-        travel_time_sec = total_distance / self.avg_speed
-        stop_time_sec = len(queue_items) * self.poi_stop_time
-        total_time_sec = travel_time_sec + stop_time_sec
-        
-        completion_time = datetime.now() + timedelta(
-            seconds=total_time_sec
+        .order_by(GuideQueueItem.seq)
+    )
+    queue_with_pois = result.all()
+
+    if not queue_with_pois:
+        return datetime.utcnow()
+
+    # 2. 로봇 현재 위치
+    robot_state = await db.get(RobotStateCurrent, robot_id)
+    current_x = float(robot_state.x_m) if robot_state else 0.0
+    current_y = float(robot_state.y_m) if robot_state else 0.0
+
+    # 3. 경로 거리 계산
+    total_distance = 0.0
+    prev_x, prev_y = current_x, current_y
+
+    for _item, poi in queue_with_pois:
+        poi_x = float(poi.x_m)
+        poi_y = float(poi.y_m)
+        total_distance += math.sqrt(
+            (poi_x - prev_x) ** 2 + (poi_y - prev_y) ** 2
         )
-        
-        return completion_time
-    
-    def _calculate_route_distance(
-        self,
-        start_x: float,
-        start_y: float,
-        queue_items: list,
-        poi_map: dict
-    ) -> float:
-        total_distance = 0.0
-        prev_x, prev_y = start_x, start_y
-        
-        for item in queue_items:
-            poi = poi_map.get(item.poi_id)
-            if not poi:
-                continue
-            
-            distance = math.sqrt(
-                (poi.x_m - prev_x)**2 + 
-                (poi.y_m - prev_y)**2
-            )
-            total_distance += distance
-            
-            # 다음 구간을 위해 업데이트
-            prev_x = poi.x_m
-            prev_y = poi.y_m
-        
-        return total_distance
-    
-    def update_robot_availability(
-        self,
-        db: DBSession,
-        robot: Robot,
-        session: Session
-    ):
-        completion_time = self.calculate_session_completion_time(
-            db, session
-        )
-        
-        robot.next_available_time = completion_time
-        db.commit()
+        prev_x, prev_y = poi_x, poi_y
+
+    # 4. 시간 계산
+    travel_time_sec = total_distance / AVG_ROBOT_SPEED_M_PER_SEC
+    stop_time_sec = len(queue_with_pois) * POI_STOP_TIME_SEC
+    total_time_sec = travel_time_sec + stop_time_sec
+
+    return datetime.utcnow() + timedelta(seconds=total_time_sec)
+
+
+async def estimate_travel_time(
+    db: AsyncSession,
+    robot_id: int,
+    target_x: float,
+    target_y: float,
+) -> int:
+    """로봇 현재 위치에서 목표까지 예상 이동시간(초)."""
+    robot_state = await db.get(RobotStateCurrent, robot_id)
+    if not robot_state:
+        return 0
+
+    dx = float(robot_state.x_m) - target_x
+    dy = float(robot_state.y_m) - target_y
+    distance = math.sqrt(dx * dx + dy * dy)
+
+    return int(distance / AVG_ROBOT_SPEED_M_PER_SEC)
