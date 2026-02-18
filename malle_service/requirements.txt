@@ -22,3 +22,4 @@ watchfiles==1.1.1
 websockets==16.0
 sqlalchemy[asyncio]>=2.0.0
 aiomysql>=0.2.0
+httpx>=0.27.0
