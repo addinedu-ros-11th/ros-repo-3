@@ -52,7 +52,7 @@ BRIDGE_HTTP_PORT = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
 STATE_UPDATE_INTERVAL = 0.5  # seconds between state pushes
 
 # Robot ID mapping: ROS2 namespace → DB robot_id
-# TODO: (팀원) 실제 로봇 네임스페이스에 맞게 수정
+# TODO: 실제 로봇 네임스페이스에 맞게 수정
 ROBOT_NS_TO_ID = {
     "robot1": 1,
     "robot2": 2,
