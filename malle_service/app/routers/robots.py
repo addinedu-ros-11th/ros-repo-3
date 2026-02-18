@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -206,8 +207,17 @@ async def send_command(
     if req.command not in valid_commands:
         raise HTTPException(status_code=400, detail=f"Invalid command. Valid: {valid_commands}")
 
-    # TODO: Forward command to ROS2 via bridge_node
-    # For now, just update mode and broadcast
+    # Forward command to ROS2 via bridge_node
+    bridge_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.post(
+                f"http://localhost:9100/bridge/command",
+                json={"robot_id": robot_id, "command": req.command},
+            )
+            bridge_ok = resp.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pass  # bridge_node offline — command still recorded in DB
 
     if req.command == "return_station":
         robot.current_mode = RobotMode.IDLE
@@ -224,4 +234,4 @@ async def send_command(
         "command": req.command,
     })
 
-    return {"ok": True, "robot_id": robot_id, "command": req.command}
+    return {"ok": True, "robot_id": robot_id, "command": req.command, "bridge_connected": bridge_ok}
