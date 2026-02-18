@@ -47,7 +47,7 @@ async def create_session(req: SessionCreateRequest, db: AsyncSession = Depends(g
     await db.flush()
     await db.refresh(session)
 
-    # TODO: 로봇 자동 배정 — 팀원 알고리즘 연결
+    # TODO: 로봇 자동 배정 — 알고리즘 연결
     # 현재는 가장 가까운 IDLE 로봇을 단순 배정 (데모용)
     idle_robot = await db.execute(
         select(Robot).where(Robot.current_mode == RobotMode.IDLE, Robot.is_online == True).limit(1)
