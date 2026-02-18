@@ -114,8 +114,16 @@ async def ws_mobile(ws: WebSocket, session_id: int):
                 msg = json.loads(data)
                 if msg.get("type") == "PING":
                     await ws.send_text(manager._make_message("PONG", {}))
+                elif msg.get("type") == "VOICE_CMD":
+                    from app.ws.handlers import handle_voice_command
+                    await handle_voice_command(
+                        session_id=session_id,
+                        text=msg.get("text", ""),
+                        client_type="mobile",
+                    )
             except json.JSONDecodeError:
-                pass
+                if data == "PING":
+                    await ws.send_text(manager._make_message("PONG", {}))
     except WebSocketDisconnect:
         manager.disconnect_mobile(session_id)
 
@@ -148,9 +156,15 @@ async def ws_dashboard(ws: WebSocket):
                 if msg_type == "PING":
                     await ws.send_text(manager._make_message("PONG", {}))
                 elif msg_type == "TELEOP_CMD":
-                    # Forward teleop commands to robot via bridge_node
-                    # TODO: integrate with bridge_node
-                    pass
+                    from app.ws.handlers import handle_dashboard_teleop
+                    await handle_dashboard_teleop(msg.get("payload", {}))
+                elif msg_type == "VOICE_CMD":
+                    from app.ws.handlers import handle_voice_command
+                    await handle_voice_command(
+                        session_id=msg.get("session_id", 0),
+                        text=msg.get("text", ""),
+                        client_type="dashboard",
+                    )
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
