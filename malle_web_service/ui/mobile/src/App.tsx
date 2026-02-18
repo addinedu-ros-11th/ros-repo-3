@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,8 +16,26 @@ import Lockbox from "./pages/Lockbox";
 import ShoppingList from "./pages/ShoppingList";
 import TaskComplete from "./pages/TaskComplete";
 import NotFound from "./pages/NotFound";
+import { useAppStore } from "./store/appStore";
+import { useWsHandler } from "./ws/useWsHandler";
 
 const queryClient = new QueryClient();
+
+/** 서버 데이터 fetch + WS 연결을 담당하는 내부 컴포넌트 */
+function AppInit() {
+  const initFromServer = useAppStore((s) => s.initFromServer);
+  const currentSessionId = useAppStore((s) => s.currentSessionId);
+
+  // 앱 마운트 시 서버에서 stores/pois 로드 (실패 시 fallback 유지)
+  useEffect(() => {
+    initFromServer();
+  }, [initFromServer]);
+
+  // 세션이 생기면 WS 연결
+  useWsHandler(currentSessionId);
+
+  return null;
+}
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -24,6 +43,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <AppInit />
         <Routes>
           <Route path="/" element={<AppLayout><Home /></AppLayout>} />
           <Route path="/mode" element={<AppLayout><Mode /></AppLayout>} />
