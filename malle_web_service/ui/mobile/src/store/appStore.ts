@@ -1,4 +1,7 @@
 import { create } from 'zustand';
+import { sessionApi } from '@/api/sessions';
+import { guideApi } from '@/api/guide';
+import { pickupApi, lockboxApi, storeApi, poiApi, type PoiRes, type StoreRes } from '@/api/services';
 
 export type SessionState = 'NO_SESSION' | 'FINDING_ROBOT' | 'ROBOT_ASSIGNED' | 'APPROACHING' | 'PIN_MATCHING' | 'ACTIVE' | 'ENDED';
 export type RobotMode = 'GUIDE' | 'FOLLOW' | 'PICKUP' | null;
@@ -26,9 +29,7 @@ export interface Session {
 
 export interface TaskMission {
   type: TaskMissionType;
-  // Guide mission
   destinationPoi?: POI;
-  // Pickup mission
   storeId?: string;
   storeName?: string;
   items?: { name: string; quantity: number; price: number }[];
@@ -117,37 +118,34 @@ export interface POI {
 }
 
 interface AppState {
-  // User
   userName: string;
   userPhone: string;
 
-  // Session
+  /** ★ 서버 연동용 ID */
+  currentSessionId: number | null;
+  currentRobotId: number | null;
+  matchPin: string | null;
+
   sessionState: SessionState;
   robot: Robot | null;
   session: Session;
   taskMission: TaskMission | null;
   approachingEta: number;
 
-  // Modes
   guideQueue: GuideDestination[];
   followMe: FollowMeState;
   pickupOrder: PickupOrder | null;
 
-  // Lockbox
   lockboxSlots: LockboxSlot[];
   lockboxLogs: LockboxLog[];
-
-  // Shopping List
   shoppingList: Product[];
-
-  // Search
   searchState: SearchState;
-
-  // Data
   stores: Store[];
   pois: POI[];
 
-  // Actions
+  /** ★ App mount 시 서버에서 stores/pois fetch */
+  initFromServer: () => Promise<void>;
+
   setUserName: (name: string) => void;
   startFindingRobot: (type: SessionType, duration: number) => void;
   assignRobot: (robot: Robot) => void;
@@ -156,12 +154,9 @@ interface AppState {
   endSession: () => void;
   setRobotMode: (mode: RobotMode) => void;
   updateRemainingTime: (seconds: number) => void;
-
-  // Task mission actions
   setTaskMission: (mission: TaskMission) => void;
   completeTaskSession: () => void;
 
-  // Guide actions
   addToGuideQueue: (poi: POI) => void;
   removeFromGuideQueue: (id: string) => void;
   toggleGuideSelection: (id: string) => void;
@@ -169,35 +164,35 @@ interface AppState {
   startGuide: () => void;
   completeCurrentGuide: () => void;
 
-  // Follow actions
   startFollowMe: (tagNumber: 11 | 12 | 13) => void;
   stopFollowMe: () => void;
   setFollowStatus: (status: FollowStatus) => void;
 
-  // Pickup actions
   createPickupOrder: (storeId: string, items: { name: string; quantity: number; price: number }[]) => void;
   setPickupStatus: (status: PickupStatus) => void;
   setMeetupLocation: (location: string) => void;
 
-  // Lockbox actions
   openSlot: (slotNumber: number) => void;
   confirmSlotFull: (slotNumber: number) => void;
   confirmSlotEmpty: (slotNumber: number) => void;
 
-  // Timer
   tickTimer: () => void;
   tickApproachingEta: () => void;
 
-  // Shopping list actions
   toggleProductComplete: (id: string) => void;
   addToShoppingList: (product: Omit<Product, 'id' | 'completed'>) => void;
   removeFromShoppingList: (id: string) => void;
 
-  // Search actions
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   setSearchFilter: (filter: string) => void;
+
+  /** ★ WS 핸들러 전용 */
+  _setGuideQueueFromServer: (queue: GuideDestination[]) => void;
+  _updateRobotState: (data: { battery_pct?: number; x_m?: number; y_m?: number }) => void;
 }
+
+/* ───── fallback data ───── */
 
 const initialStores: Store[] = [
   { id: 'zara', name: 'Zara', category: 'Fashion & Apparel', location: 'Level 2, Zone B', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
@@ -246,354 +241,234 @@ const initialShoppingList: Product[] = [
   { id: '8', storeId: 'hm', name: 'Basic T-Shirt', option: 'Size L, White', price: 9.99, completed: false },
 ];
 
+/* ───── server → frontend mapping ───── */
+
+const catIcon: Record<string, string> = {
+  fashion: 'checkroom', sports: 'sports_basketball', electronics: 'laptop_mac',
+  cafe: 'local_cafe', fitness: 'fitness_center', dining: 'local_cafe',
+};
+function mapStore(s: StoreRes): Store {
+  const c = (s.category || 'other').toLowerCase();
+  return { id: String(s.id), name: s.name || `Store #${s.id}`, category: s.category || 'Other',
+    location: `(${s.x_m?.toFixed(0) ?? 0}, ${s.y_m?.toFixed(0) ?? 0})`,
+    icon: catIcon[c] || 'store', open: true, closeTime: '9:00 PM' };
+}
+function mapPoi(p: PoiRes): POI {
+  return { id: String(p.id), name: p.name, x: p.x_m, y: p.y_m,
+    waitPoint: { x: p.wait_x_m ?? p.x_m - 2, y: p.wait_y_m ?? p.y_m - 2 },
+    category: p.type || 'OTHER' };
+}
+
+/* ==================== STORE ==================== */
+
 export const useAppStore = create<AppState>((set, get) => ({
-  // Initial state
   userName: 'Sarah',
   userPhone: '+1 (555) 123-4567',
+  currentSessionId: null,
+  currentRobotId: null,
+  matchPin: null,
 
   sessionState: 'NO_SESSION',
   robot: null,
-  session: {
-    type: 'TIME',
-    duration: 120,
-    remainingTime: 7200,
-    startedAt: null,
-  },
+  session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null },
   taskMission: null,
   approachingEta: 10,
-
   guideQueue: [],
   followMe: { active: false, tagNumber: 11, status: 'STOPPED' },
   pickupOrder: null,
-
   lockboxSlots: initialLockboxSlots,
   lockboxLogs: initialLockboxLogs,
-
   shoppingList: initialShoppingList,
-
-  searchState: {
-    query: '',
-    filter: 'All',
-    results: initialStores,
-    isOpen: false,
-  },
-
+  searchState: { query: '', filter: 'All', results: initialStores, isOpen: false },
   stores: initialStores,
   pois: initialPOIs,
 
-  // Actions
+  /* ★ 서버에서 stores/pois 로드 (App mount 시 1회) */
+  initFromServer: async () => {
+    try {
+      const [sr, pr] = await Promise.all([
+        storeApi.list().catch(() => null),
+        poiApi.list().catch(() => null),
+      ]);
+      const u: Partial<AppState> = {};
+      if (sr?.length) { const m = sr.map(mapStore); u.stores = m; u.searchState = { ...get().searchState, results: m }; }
+      if (pr?.length) u.pois = pr.map(mapPoi);
+      if (Object.keys(u).length) set(u);
+    } catch { /* fallback data 유지 */ }
+  },
+
+  /* ───── Session ───── */
+
   setUserName: (name) => set({ userName: name }),
 
-  startFindingRobot: (type, duration) => set({
-    sessionState: 'FINDING_ROBOT',
-    session: { type, duration, remainingTime: duration * 60, startedAt: null },
-    approachingEta: 10,
-  }),
+  startFindingRobot: (type, duration) => {
+    // optimistic UI
+    set({ sessionState: 'FINDING_ROBOT', session: { type, duration, remainingTime: duration * 60, startedAt: null }, approachingEta: 10 });
+    // ★ API → 서버가 로봇 배정 후 WS SESSION_ASSIGNED 전송
+    sessionApi.create({ user_id: 1, session_type: type, requested_minutes: type === 'TIME' ? duration : undefined })
+      .then((res) => {
+        set({ currentSessionId: res.id, matchPin: res.match_pin });
+        if (res.assigned_robot_id && res.status === 'ASSIGNED') {
+          set({ currentRobotId: res.assigned_robot_id, sessionState: 'APPROACHING',
+            robot: { id: String(res.assigned_robot_id), name: `Mall·E-${res.assigned_robot_id}`, battery: 80, mode: null, location: { x: 0, y: 0 } } });
+        }
+      }).catch((e) => console.error('[API] session create:', e));
+  },
 
-  assignRobot: (robot) => set({
-    sessionState: 'APPROACHING',
-    robot: { ...robot, name: robot.name.replace('PinkyPro', 'Mall·E') },
-  }),
-
+  assignRobot: (robot) => set({ sessionState: 'APPROACHING', robot: { ...robot, name: robot.name.replace('PinkyPro', 'Mall·E') } }),
   startPinMatching: () => set({ sessionState: 'PIN_MATCHING', approachingEta: 0 }),
 
   activateSession: () => set((state) => {
-    const updates: Partial<AppState> = {
-      sessionState: 'ACTIVE',
-      session: { ...state.session, startedAt: new Date() },
-    };
-
-    // Auto-setup for TASK mode
+    const updates: Partial<AppState> = { sessionState: 'ACTIVE', session: { ...state.session, startedAt: new Date() } };
     if (state.session.type === 'TASK' && state.taskMission) {
       if (state.taskMission.type === 'GUIDE' && state.taskMission.destinationPoi) {
         const poi = state.taskMission.destinationPoi;
-        updates.guideQueue = [{
-          id: `guide-task-${Date.now()}`,
-          poiId: poi.id,
-          poiName: poi.name,
-          floor: 'Level 1',
-          estimatedTime: Math.floor(Math.random() * 5) + 2,
-          status: 'PENDING',
-          selected: true,
-        }];
+        updates.guideQueue = [{ id: `guide-task-${Date.now()}`, poiId: poi.id, poiName: poi.name, floor: 'Level 1', estimatedTime: Math.floor(Math.random() * 5) + 2, status: 'PENDING', selected: true }];
         updates.robot = state.robot ? { ...state.robot, mode: 'GUIDE' } : null;
+        if (state.currentSessionId) guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
       } else if (state.taskMission.type === 'PICKUP' && state.taskMission.storeId && state.taskMission.items) {
         const store = state.stores.find(s => s.id === state.taskMission!.storeId);
         const emptySlot = state.lockboxSlots.find(s => s.status === 'EMPTY');
         const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
-        updates.pickupOrder = {
-          orderId,
-          storeId: state.taskMission.storeId,
-          storeName: store?.name || state.taskMission.storeName || 'Unknown Store',
-          items: state.taskMission.items,
-          status: 'MOVING',
-          meetupLocation: null,
-          slotId: emptySlot?.slotNumber || null,
-        };
-        if (emptySlot) {
-          updates.lockboxSlots = state.lockboxSlots.map(slot =>
-            slot.slotNumber === emptySlot.slotNumber
-              ? {
-                  ...slot,
-                  status: 'RESERVED' as LockboxStatus,
-                  orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName },
-                }
-              : slot
-          );
-        }
+        updates.pickupOrder = { orderId, storeId: state.taskMission.storeId, storeName: store?.name || state.taskMission.storeName || 'Unknown Store', items: state.taskMission.items, status: 'MOVING', meetupLocation: null, slotId: emptySlot?.slotNumber || null };
+        if (emptySlot) updates.lockboxSlots = state.lockboxSlots.map(slot => slot.slotNumber === emptySlot.slotNumber ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot);
         updates.robot = state.robot ? { ...state.robot, mode: 'PICKUP' } : null;
       }
     }
-
     return updates;
   }),
 
-  endSession: () => set({
-    sessionState: 'NO_SESSION',
-    robot: null,
-    session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null },
-    taskMission: null,
-    guideQueue: [],
-    followMe: { active: false, tagNumber: 11, status: 'STOPPED' },
-    pickupOrder: null,
-  }),
+  endSession: () => {
+    const { currentSessionId } = get();
+    if (currentSessionId) sessionApi.end(currentSessionId).catch(() => {});
+    set({ sessionState: 'NO_SESSION', robot: null, session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null }, taskMission: null, guideQueue: [], followMe: { active: false, tagNumber: 11, status: 'STOPPED' }, pickupOrder: null, currentSessionId: null, currentRobotId: null, matchPin: null });
+  },
 
-  setRobotMode: (mode) => set((state) => ({
-    robot: state.robot ? { ...state.robot, mode } : null,
-  })),
-
-  updateRemainingTime: (seconds) => set((state) => ({
-    session: { ...state.session, remainingTime: seconds },
-  })),
-
-  // Task mission actions
+  setRobotMode: (mode) => set((s) => ({ robot: s.robot ? { ...s.robot, mode } : null })),
+  updateRemainingTime: (seconds) => set((s) => ({ session: { ...s.session, remainingTime: seconds } })),
   setTaskMission: (mission) => set({ taskMission: mission }),
-
   completeTaskSession: () => set({ sessionState: 'ENDED' }),
 
-  // Guide actions
-  addToGuideQueue: (poi) => set((state) => ({
-    guideQueue: [...state.guideQueue, {
-      id: `guide-${Date.now()}`,
-      poiId: poi.id,
-      poiName: poi.name,
-      floor: 'Level 1',
-      estimatedTime: Math.floor(Math.random() * 5) + 2,
-      status: 'PENDING',
-      selected: true,
-    }],
-  })),
+  /* ───── Guide ───── */
 
-  removeFromGuideQueue: (id) => set((state) => ({
-    guideQueue: state.guideQueue.filter((item) => item.id !== id),
-  })),
-
-  toggleGuideSelection: (id) => set((state) => ({
-    guideQueue: state.guideQueue.map((item) =>
-      item.id === id ? { ...item, selected: !item.selected } : item
-    ),
-  })),
-
-  clearGuideQueue: () => set({ guideQueue: [] }),
-
-  startGuide: () => set((state) => {
-    const firstSelected = state.guideQueue.find((item) => item.selected && item.status === 'PENDING');
-    if (!firstSelected) return state;
-    return {
-      guideQueue: state.guideQueue.map((item) =>
-        item.id === firstSelected.id ? { ...item, status: 'IN_PROGRESS' } : item
-      ),
-      robot: state.robot ? { ...state.robot, mode: 'GUIDE' } : null,
-    };
+  addToGuideQueue: (poi) => {
+    set((s) => ({ guideQueue: [...s.guideQueue, { id: `guide-${Date.now()}`, poiId: poi.id, poiName: poi.name, floor: 'Level 1', estimatedTime: Math.floor(Math.random() * 5) + 2, status: 'PENDING', selected: true }] }));
+    const { currentSessionId } = get();
+    if (currentSessionId) guideApi.addToQueue(currentSessionId, Number(poi.id)).catch(() => {});
+  },
+  removeFromGuideQueue: (id) => {
+    set((s) => ({ guideQueue: s.guideQueue.filter((i) => i.id !== id) }));
+    const { currentSessionId } = get();
+    if (currentSessionId && !isNaN(Number(id))) guideApi.removeFromQueue(currentSessionId, Number(id)).catch(() => {});
+  },
+  toggleGuideSelection: (id) => set((s) => ({ guideQueue: s.guideQueue.map((i) => i.id === id ? { ...i, selected: !i.selected } : i) })),
+  clearGuideQueue: () => {
+    set({ guideQueue: [] });
+    const { currentSessionId } = get();
+    if (currentSessionId) guideApi.clear(currentSessionId).catch(() => {});
+  },
+  startGuide: () => {
+    set((s) => {
+      const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
+      if (!f) return s;
+      return { guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' } : i), robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null };
+    });
+    const { currentSessionId } = get();
+    if (currentSessionId) guideApi.execute(currentSessionId).catch(() => {});
+  },
+  completeCurrentGuide: () => set((s) => {
+    const cur = s.guideQueue.find((i) => i.status === 'IN_PROGRESS');
+    if (!cur) return s;
+    const updated = s.guideQueue.map((i) => i.id === cur.id ? { ...i, status: 'DONE' as GuideStatus } : i);
+    const nxt = updated.find((i) => i.selected && i.status === 'PENDING');
+    return { guideQueue: nxt ? updated.map((i) => i.id === nxt.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i) : updated };
   }),
+  _setGuideQueueFromServer: (queue) => set({ guideQueue: queue }),
 
-  completeCurrentGuide: () => set((state) => {
-    const currentGuide = state.guideQueue.find((item) => item.status === 'IN_PROGRESS');
-    if (!currentGuide) return state;
+  /* ───── Follow ───── */
 
-    const updatedQueue = state.guideQueue.map((item) =>
-      item.id === currentGuide.id ? { ...item, status: 'DONE' as GuideStatus } : item
-    );
+  startFollowMe: (tagNumber) => {
+    set((s) => ({ followMe: { active: true, tagNumber, status: 'FOLLOWING' }, robot: s.robot ? { ...s.robot, mode: 'FOLLOW' } : null }));
+    const { currentSessionId } = get();
+    if (currentSessionId) sessionApi.setFollowTag(currentSessionId, tagNumber).catch(() => {});
+  },
+  stopFollowMe: () => set((s) => ({ followMe: { ...s.followMe, active: false, status: 'STOPPED' }, robot: s.robot ? { ...s.robot, mode: null } : null })),
+  setFollowStatus: (status) => set((s) => ({ followMe: { ...s.followMe, status } })),
 
-    const nextPending = updatedQueue.find((item) => item.selected && item.status === 'PENDING');
+  /* ───── Pickup ───── */
 
-    return {
-      guideQueue: nextPending
-        ? updatedQueue.map((item) =>
-            item.id === nextPending.id ? { ...item, status: 'IN_PROGRESS' as GuideStatus } : item
-          )
-        : updatedQueue,
-    };
-  }),
-
-  // Follow actions
-  startFollowMe: (tagNumber) => set((state) => ({
-    followMe: { active: true, tagNumber, status: 'FOLLOWING' },
-    robot: state.robot ? { ...state.robot, mode: 'FOLLOW' } : null,
-  })),
-
-  stopFollowMe: () => set((state) => ({
-    followMe: { ...state.followMe, active: false, status: 'STOPPED' },
-    robot: state.robot ? { ...state.robot, mode: null } : null,
-  })),
-
-  setFollowStatus: (status) => set((state) => ({
-    followMe: { ...state.followMe, status },
-  })),
-
-  // Pickup actions
   createPickupOrder: (storeId, items) => {
     const state = get();
     const store = state.stores.find((s) => s.id === storeId);
     const emptySlot = state.lockboxSlots.find(s => s.status === 'EMPTY');
-    if (!emptySlot) return; // Should not happen — UI blocks this
+    if (!emptySlot) return;
     const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
     set({
-      pickupOrder: {
-        orderId,
-        storeId,
-        storeName: store?.name || 'Unknown Store',
-        items,
-        status: 'IDLE',
-        meetupLocation: null,
-        slotId: emptySlot.slotNumber,
-      },
-      lockboxSlots: state.lockboxSlots.map(slot =>
-        slot.slotNumber === emptySlot.slotNumber
-          ? {
-              ...slot,
-              status: 'RESERVED' as LockboxStatus,
-              orderInfo: {
-                orderId,
-                storeName: store?.name || 'Unknown Store',
-                customerName: state.userName,
-              },
-            }
-          : slot
-      ),
+      pickupOrder: { orderId, storeId, storeName: store?.name || 'Unknown Store', items, status: 'IDLE', meetupLocation: null, slotId: emptySlot.slotNumber },
+      lockboxSlots: state.lockboxSlots.map(slot => slot.slotNumber === emptySlot.slotNumber ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot),
     });
+    if (state.currentSessionId) pickupApi.create(state.currentSessionId, { pickup_poi_id: Number(storeId), created_channel: 'APP', items: items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })) }).catch(() => {});
   },
-
-  setPickupStatus: (status) => set((state) => {
-    const updates: Partial<AppState> = {
-      pickupOrder: state.pickupOrder ? { ...state.pickupOrder, status } : null,
-      robot: state.robot ? { ...state.robot, mode: status !== 'DONE' && status !== 'IDLE' ? 'PICKUP' : state.robot.mode } : null,
+  setPickupStatus: (status) => set((s) => {
+    const u: Partial<AppState> = {
+      pickupOrder: s.pickupOrder ? { ...s.pickupOrder, status } : null,
+      robot: s.robot ? { ...s.robot, mode: status !== 'DONE' && status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
     };
-    // When robot is returning with items loaded, mark slot as PICKED_UP
-    if (status === 'RETURNING' && state.pickupOrder?.slotId) {
-      updates.lockboxSlots = state.lockboxSlots.map(slot =>
-        slot.slotNumber === state.pickupOrder!.slotId
-          ? { ...slot, status: 'PICKED_UP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) }
-          : slot
-      );
-    }
-    return updates;
+    if (status === 'RETURNING' && s.pickupOrder?.slotId)
+      u.lockboxSlots = s.lockboxSlots.map(slot => slot.slotNumber === s.pickupOrder!.slotId ? { ...slot, status: 'PICKED_UP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : slot);
+    return u;
   }),
+  setMeetupLocation: (location) => set((s) => ({ pickupOrder: s.pickupOrder ? { ...s.pickupOrder, meetupLocation: location } : null })),
 
-  setMeetupLocation: (location) => set((state) => ({
-    pickupOrder: state.pickupOrder ? { ...state.pickupOrder, meetupLocation: location } : null,
-  })),
+  /* ───── Lockbox ───── */
 
-  // Lockbox actions
   openSlot: (slotNumber) => {
-    const newLog: LockboxLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date(),
-      slotNumber,
-      action: 'OPENED',
-      result: 'SUCCESS',
-      description: 'Slot opened successfully',
-    };
-    set((state) => ({
-      lockboxLogs: [newLog, ...state.lockboxLogs].slice(0, 10),
-    }));
+    const { currentRobotId } = get();
+    set((s) => ({ lockboxLogs: [{ id: `log-${Date.now()}`, timestamp: new Date(), slotNumber, action: 'OPENED' as const, result: 'SUCCESS' as const, description: 'Slot opened successfully' }, ...s.lockboxLogs].slice(0, 10) }));
+    if (currentRobotId) lockboxApi.openSlot(currentRobotId, slotNumber).catch(() => {});
   },
-
   confirmSlotFull: (slotNumber) => {
-    const newLog: LockboxLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date(),
-      slotNumber,
-      action: 'SECURED',
-      result: 'SUCCESS',
-      description: 'Items securely stored',
-    };
-    set((state) => ({
-      lockboxSlots: state.lockboxSlots.map((slot) =>
-        slot.slotNumber === slotNumber
-          ? { ...slot, status: 'FULL', occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) }
-          : slot
-      ),
-      lockboxLogs: [newLog, ...state.lockboxLogs].slice(0, 10),
+    set((s) => ({
+      lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'FULL', occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : sl),
+      lockboxLogs: [{ id: `log-${Date.now()}`, timestamp: new Date(), slotNumber, action: 'SECURED' as const, result: 'SUCCESS' as const, description: 'Items securely stored' }, ...s.lockboxLogs].slice(0, 10),
     }));
   },
+  confirmSlotEmpty: (slotNumber) => set((s) => ({ lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'EMPTY', occupiedSince: undefined, orderInfo: undefined } : sl) })),
 
-  confirmSlotEmpty: (slotNumber) => set((state) => ({
-    lockboxSlots: state.lockboxSlots.map((slot) =>
-      slot.slotNumber === slotNumber
-        ? { ...slot, status: 'EMPTY', occupiedSince: undefined, orderInfo: undefined }
-        : slot
-    ),
-  })),
+  /* ───── Timer ───── */
 
-  // Timer
-  tickTimer: () => set((state) => {
-    if (state.sessionState !== 'ACTIVE' || state.session.type !== 'TIME') return state;
-    const next = Math.max(0, state.session.remainingTime - 1);
-    return { session: { ...state.session, remainingTime: next } };
+  tickTimer: () => set((s) => {
+    if (s.sessionState !== 'ACTIVE' || s.session.type !== 'TIME') return s;
+    return { session: { ...s.session, remainingTime: Math.max(0, s.session.remainingTime - 1) } };
+  }),
+  tickApproachingEta: () => set((s) => {
+    if (s.sessionState !== 'APPROACHING') return s;
+    if (s.approachingEta <= 1) return { approachingEta: 0, sessionState: 'PIN_MATCHING' };
+    return { approachingEta: s.approachingEta - 1 };
   }),
 
-  tickApproachingEta: () => set((state) => {
-    if (state.sessionState !== 'APPROACHING') return state;
-    if (state.approachingEta <= 1) {
-      return { approachingEta: 0, sessionState: 'PIN_MATCHING' };
-    }
-    return { approachingEta: state.approachingEta - 1 };
+  /* ───── Shopping list ───── */
+
+  toggleProductComplete: (id) => set((s) => ({ shoppingList: s.shoppingList.map((p) => p.id === id ? { ...p, completed: !p.completed } : p) })),
+  addToShoppingList: (product) => set((s) => ({ shoppingList: [...s.shoppingList, { ...product, id: `product-${Date.now()}`, completed: false }] })),
+  removeFromShoppingList: (id) => set((s) => ({ shoppingList: s.shoppingList.filter((p) => p.id !== id) })),
+
+  /* ───── Search ───── */
+
+  setSearchOpen: (open) => set((s) => ({ searchState: { ...s.searchState, isOpen: open } })),
+  setSearchQuery: (query) => set((s) => {
+    const filtered = s.stores.filter((st) => (st.name.toLowerCase().includes(query.toLowerCase()) || st.category.toLowerCase().includes(query.toLowerCase())) && (s.searchState.filter === 'All' || st.category.toLowerCase().includes(s.searchState.filter.toLowerCase())));
+    return { searchState: { ...s.searchState, query, results: filtered } };
+  }),
+  setSearchFilter: (filter) => set((s) => {
+    const filtered = s.stores.filter((st) => (st.name.toLowerCase().includes(s.searchState.query.toLowerCase()) || st.category.toLowerCase().includes(s.searchState.query.toLowerCase())) && (filter === 'All' || st.category.toLowerCase().includes(filter.toLowerCase())));
+    return { searchState: { ...s.searchState, filter, results: filtered } };
   }),
 
-  // Shopping list actions
-  toggleProductComplete: (id) => set((state) => ({
-    shoppingList: state.shoppingList.map((product) =>
-      product.id === id ? { ...product, completed: !product.completed } : product
-    ),
-  })),
+  /* ───── WS-driven ───── */
 
-  addToShoppingList: (product) => set((state) => ({
-    shoppingList: [...state.shoppingList, { ...product, id: `product-${Date.now()}`, completed: false }],
-  })),
-
-  removeFromShoppingList: (id) => set((state) => ({
-    shoppingList: state.shoppingList.filter((product) => product.id !== id),
-  })),
-
-  // Search actions
-  setSearchOpen: (open) => set((state) => ({
-    searchState: { ...state.searchState, isOpen: open },
-  })),
-
-  setSearchQuery: (query) => set((state) => {
-    const filtered = state.stores.filter((store) => {
-      const matchesQuery = store.name.toLowerCase().includes(query.toLowerCase()) ||
-        store.category.toLowerCase().includes(query.toLowerCase());
-      const matchesFilter = state.searchState.filter === 'All' ||
-        store.category.toLowerCase().includes(state.searchState.filter.toLowerCase());
-      return matchesQuery && matchesFilter;
-    });
-    return {
-      searchState: { ...state.searchState, query, results: filtered },
-    };
-  }),
-
-  setSearchFilter: (filter) => set((state) => {
-    const filtered = state.stores.filter((store) => {
-      const matchesQuery = store.name.toLowerCase().includes(state.searchState.query.toLowerCase()) ||
-        store.category.toLowerCase().includes(state.searchState.query.toLowerCase());
-      const matchesFilter = filter === 'All' ||
-        store.category.toLowerCase().includes(filter.toLowerCase());
-      return matchesQuery && matchesFilter;
-    });
-    return {
-      searchState: { ...state.searchState, filter, results: filtered },
-    };
+  _updateRobotState: (data) => set((s) => {
+    if (!s.robot) return s;
+    return { robot: { ...s.robot, battery: data.battery_pct ?? s.robot.battery, location: { x: data.x_m ?? s.robot.location.x, y: data.y_m ?? s.robot.location.y } } };
   }),
 }));
