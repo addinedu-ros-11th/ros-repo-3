@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { robotApi, missionApi, eventApi, zoneApi, teleopApi } from '@/api/services';
+import { useWsHandler } from '@/ws/useWsHandler';
 
 export interface Robot {
   id: string;
@@ -93,6 +95,8 @@ interface DashboardContextValue extends DashboardState {
   setExpandedAlertId: (id: string | null) => void;
 }
 
+/* ───── fallback data ───── */
+
 const initialRobots: Robot[] = [
   { id: 'R-422', battery: 82, mode: 'PICKUP', status: 'MOVING', position: { x: 120, y: 80 }, currentTarget: 'Zara Store', eta: 45, sessionId: 'S-001', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
   { id: 'R-742', battery: 14, mode: 'FOLLOW', status: 'E_STOP', position: { x: 200, y: 150 }, currentTarget: null, eta: null, sessionId: 'S-002', lastSeen: '10:45 AM', eStopActive: true, eStopSource: 'ROBOT', commsStatus: 'WEAK', sensorStatus: 'OK' },
@@ -133,13 +137,34 @@ const initialEvents: DashboardEvent[] = [
   { id: 'E-007', timestamp: '08:55 AM', robotId: 'R-991', sessionId: null, type: 'LOW_BATTERY', severity: 'WARN', message: 'Battery critically low at 5% — Auto-docked to charging bay', payload: {} },
 ];
 
+/* ───── server → frontend mapping ───── */
+
+function mapMotionToStatus(state: Record<string, any>): Robot['status'] {
+  if (state.stop_state === 'ESTOP' || state.stop_state === 'E_STOP') return 'E_STOP';
+  switch (state.motion_state || state.nav_state) {
+    case 'MOVING': case 'NAVIGATING': return 'MOVING';
+    case 'WAITING': case 'IDLE': return 'WAITING';
+    case 'CHARGING': return 'CHARGING';
+    default: return 'WAITING';
+  }
+}
+
+function mapModeStr(m: string | null): Robot['mode'] {
+  if (!m) return null;
+  const u = m.toUpperCase();
+  if (u === 'GUIDE') return 'GUIDE';
+  if (u === 'FOLLOW') return 'FOLLOW';
+  if (u === 'PICKUP') return 'PICKUP';
+  return null;
+}
+
 const DashboardContext = createContext<DashboardContextValue | null>(null);
 
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [robots, setRobots] = useState<Robot[]>(initialRobots);
   const [missions, setMissions] = useState<Mission[]>(initialMissions);
   const [zones, setZones] = useState<Zone[]>(initialZones);
-  const [events] = useState<DashboardEvent[]>(initialEvents);
+  const [events, setEvents] = useState<DashboardEvent[]>(initialEvents);
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const [expandedMissionId, setExpandedMissionId] = useState<string | null>(null);
@@ -154,6 +179,193 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     ? { active: true, message: criticalEvent.message, robotId: criticalEvent.robotId }
     : null;
 
+  /* ───── ★ Server init (mount 시 1회) ───── */
+  useEffect(() => {
+    // Robots
+    robotApi.list().then((res) => {
+      if (!res?.robots?.length) return;
+      const mapped: Robot[] = res.robots.map((r) => ({
+        id: `R-${r.id}`,
+        battery: r.battery_pct,
+        mode: mapModeStr(r.current_mode),
+        status: r.state ? mapMotionToStatus(r.state) : (r.is_online ? 'WAITING' : 'OFFLINE'),
+        position: { x: r.state?.x_m ?? 0, y: r.state?.y_m ?? 0 },
+        currentTarget: null,
+        eta: r.state?.eta_sec ?? null,
+        sessionId: null,
+        lastSeen: r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A',
+        eStopActive: r.state?.stop_state === 'ESTOP',
+        eStopSource: r.state?.stop_source as Robot['eStopSource'] ?? null,
+        commsStatus: r.is_online ? 'STRONG' : 'LOST',
+        sensorStatus: 'OK',
+      }));
+      setRobots(mapped);
+    }).catch(() => {});
+
+    // Missions
+    missionApi.list().then((res) => {
+      if (!res?.length) return;
+      const mapped: Mission[] = res.map((m) => ({
+        id: `M-${m.id}`,
+        robotId: `R-${m.robot_id}`,
+        sessionId: `S-${m.session_id}`,
+        type: (m.type === 'TIME' ? 'TIME' : 'TASK') as Mission['type'],
+        mode: (m.type?.toUpperCase() === 'FOLLOW' ? 'FOLLOW' : m.type?.toUpperCase() === 'PICKUP' ? 'PICKUP' : 'GUIDE') as Mission['mode'],
+        status: m.status === 'RUNNING' ? 'RUNNING' : m.status === 'COMPLETED' ? 'COMPLETED' : 'PAUSED',
+        currentTarget: m.guide_queue?.find((g) => g.status === 'PENDING')?.poi_name || '',
+        eta: 0,
+        guideQueue: m.guide_queue?.map((g) => ({
+          poiName: g.poi_name,
+          status: g.status === 'DONE' ? 'DONE' : g.status === 'ARRIVED' ? 'ARRIVED' : 'PENDING',
+        })) ?? null,
+      }));
+      setMissions(mapped);
+    }).catch(() => {});
+
+    // Events
+    eventApi.list({ limit: 30 }).then((res) => {
+      if (!res?.length) return;
+      const mapped: DashboardEvent[] = res.map((e) => ({
+        id: `E-${e.id}`,
+        timestamp: new Date(e.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: `R-${e.robot_id}`,
+        sessionId: e.session_id ? `S-${e.session_id}` : null,
+        type: e.type as DashboardEvent['type'],
+        severity: e.severity as DashboardEvent['severity'],
+        message: `${e.type} — ${e.severity}`,
+        payload: e.payload_json ?? {},
+      }));
+      setEvents(mapped);
+    }).catch(() => {});
+
+    // Zones
+    zoneApi.list().then((res) => {
+      if (!res?.length) return;
+      const mapped: Zone[] = res.map((z) => ({
+        id: `Z-${z.id}`,
+        name: z.name,
+        type: (z.zone_kind?.toUpperCase() || 'CAUTION') as Zone['type'],
+        active: z.is_active,
+        polygon: parseWkt(z.polygon_wkt),
+        rules: z.speed_limit_mps ? { maxSpeed: z.speed_limit_mps, priority: 'MEDIUM' as const } : undefined,
+      }));
+      setZones(mapped);
+    }).catch(() => {});
+  }, []);
+
+  /* ───── ★ WS 핸들러 콜백 연결 ───── */
+  useWsHandler({
+    onRobotStateUpdated: useCallback((robotId: number, state: Record<string, any>) => {
+      const rid = `R-${robotId}`;
+      setRobots(prev => prev.map(r => r.id === rid ? {
+        ...r,
+        battery: state.battery_pct ?? r.battery,
+        position: { x: state.x_m ?? r.position.x, y: state.y_m ?? r.position.y },
+        status: mapMotionToStatus(state),
+        eta: state.eta_sec ?? r.eta,
+        lastSeen: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      } : r));
+    }, []),
+
+    onEStop: useCallback((robotId: number, source: string) => {
+      const rid = `R-${robotId}`;
+      setRobots(prev => prev.map(r => r.id === rid ? { ...r, eStopActive: true, eStopSource: (source || 'ROBOT') as Robot['eStopSource'], status: 'E_STOP' as const } : r));
+      setEmergencyDismissed(false);
+      setEvents(prev => [{
+        id: `E-ws-${Date.now()}`, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: rid, sessionId: null, type: 'ESTOP', severity: 'CRITICAL',
+        message: `E-Stop triggered on ${rid} by ${source || 'ROBOT'}`, payload: {},
+      }, ...prev].slice(0, 50));
+    }, []),
+
+    onEStopReleased: useCallback((robotId: number) => {
+      const rid = `R-${robotId}`;
+      setRobots(prev => prev.map(r => r.id === rid ? { ...r, eStopActive: false, eStopSource: null, status: 'WAITING' as const } : r));
+    }, []),
+
+    onMissionCreated: useCallback((data: Record<string, any>) => {
+      setMissions(prev => [{
+        id: `M-${data.id || Date.now()}`,
+        robotId: `R-${data.robot_id}`,
+        sessionId: `S-${data.session_id}`,
+        type: data.type || 'TASK',
+        mode: data.mode || 'GUIDE',
+        status: 'RUNNING',
+        currentTarget: data.current_target || '',
+        eta: data.eta ?? 0,
+        guideQueue: data.guide_queue ?? null,
+      }, ...prev]);
+    }, []),
+
+    onMissionUpdated: useCallback((data: Record<string, any>) => {
+      const mid = `M-${data.id}`;
+      setMissions(prev => prev.map(m => m.id === mid ? {
+        ...m,
+        status: data.status === 'COMPLETED' ? 'COMPLETED' : data.status === 'PAUSED' ? 'PAUSED' : m.status,
+        currentTarget: data.current_target ?? m.currentTarget,
+        eta: data.eta ?? m.eta,
+      } : m));
+    }, []),
+
+    onSessionAssigned: useCallback((data: Record<string, any>) => {
+      const rid = `R-${data.assigned_robot_id}`;
+      setRobots(prev => prev.map(r => r.id === rid ? { ...r, sessionId: `S-${data.id}` } : r));
+    }, []),
+
+    onEventReceived: useCallback((data: Record<string, any>) => {
+      setEvents(prev => [{
+        id: `E-${data.id || Date.now()}`,
+        timestamp: data.created_at ? new Date(data.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: `R-${data.robot_id}`,
+        sessionId: data.session_id ? `S-${data.session_id}` : null,
+        type: data.type as DashboardEvent['type'],
+        severity: data.severity as DashboardEvent['severity'],
+        message: data.message || `${data.type} — ${data.severity}`,
+        payload: data.payload_json ?? {},
+      }, ...prev].slice(0, 50));
+    }, []),
+
+    onGuideArrived: useCallback((data: Record<string, any>) => {
+      // 미션 가이드큐에서 해당 POI ARRIVED로 변경
+      setMissions(prev => prev.map(m => {
+        if (!m.guideQueue) return m;
+        return {
+          ...m,
+          guideQueue: m.guideQueue.map(g =>
+            g.poiName === data.poi_name ? { ...g, status: 'ARRIVED' as const } : g
+          ),
+        };
+      }));
+    }, []),
+
+    onPickupStatusChanged: useCallback((data: Record<string, any>) => {
+      // 해당 로봇의 미션 상태 갱신
+      if (data.robot_id) {
+        const rid = `R-${data.robot_id}`;
+        setMissions(prev => prev.map(m =>
+          m.robotId === rid && m.mode === 'PICKUP'
+            ? { ...m, status: data.status === 'DONE' ? 'COMPLETED' as const : m.status }
+            : m
+        ));
+      }
+    }, []),
+
+    onLockboxOpened: useCallback((data: Record<string, any>) => {
+      setEvents(prev => [{
+        id: `E-lb-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: `R-${data.robot_id || 'unknown'}`,
+        sessionId: data.session_id ? `S-${data.session_id}` : null,
+        type: 'LOCKBOX_OPEN',
+        severity: 'INFO',
+        message: `Lockbox slot ${data.slot_no || '?'} opened`,
+        payload: data,
+      }, ...prev].slice(0, 50));
+    }, []),
+  });
+
+  /* ───── Actions ───── */
+
   const toggleDarkMode = useCallback(() => {
     setDarkMode(prev => {
       const next = !prev;
@@ -166,45 +378,75 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const triggerEStop = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, eStopActive: true, eStopSource: 'DASHBOARD', status: 'E_STOP' as const } : r));
+    // ★ API
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (!isNaN(numId)) robotApi.triggerEStop(numId, 'DASHBOARD').catch(() => {});
   }, []);
 
   const releaseEStop = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, eStopActive: false, eStopSource: null, status: 'WAITING' as const } : r));
+    // ★ API
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (!isNaN(numId)) robotApi.releaseEStop(numId).catch(() => {});
   }, []);
 
   const stopMission = useCallback((missionId: string) => {
     setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'PAUSED' as const } : m));
+    // ★ API
+    const numId = parseInt(missionId.replace('M-', ''));
+    if (!isNaN(numId)) missionApi.updateStatus(numId, 'PAUSED').catch(() => {});
   }, []);
 
   const restartMission = useCallback((missionId: string) => {
     setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'RUNNING' as const } : m));
+    // ★ API
+    const numId = parseInt(missionId.replace('M-', ''));
+    if (!isNaN(numId)) missionApi.updateStatus(numId, 'RUNNING').catch(() => {});
   }, []);
 
   const toggleZone = useCallback((zoneId: string) => {
     setZones(prev => prev.map(z => z.id === zoneId ? { ...z, active: !z.active } : z));
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
-    try { fetch(`/api/zones/${zoneId}/toggle`, { method: 'PATCH' }).catch(() => {}); } catch {}
-  }, []);
+    // ★ API
+    const numId = parseInt(zoneId.replace('Z-', ''));
+    const zone = zones.find(z => z.id === zoneId);
+    if (!isNaN(numId) && zone) zoneApi.update(numId, { is_active: !zone.active }).catch(() => {});
+  }, [zones]);
 
   const addZone = useCallback((zone: Zone) => {
     setZones(prev => [...prev, zone]);
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
-    try { fetch('/api/zones', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(zone) }).catch(() => {}); } catch {}
+    // ★ API
+    zoneApi.create({
+      name: zone.name,
+      polygon_wkt: `POLYGON((${zone.polygon.map(p => `${p.x} ${p.y}`).join(', ')}))`,
+      zone_kind: zone.type.toLowerCase(),
+      is_active: zone.active,
+      speed_limit_mps: zone.rules?.maxSpeed,
+    }).catch(() => {});
   }, []);
 
   const deleteZone = useCallback((zoneId: string) => {
     setZones(prev => prev.filter(z => z.id !== zoneId));
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
-    try { fetch(`/api/zones/${zoneId}`, { method: 'DELETE' }).catch(() => {}); } catch {}
+    // ★ API
+    const numId = parseInt(zoneId.replace('Z-', ''));
+    if (!isNaN(numId)) zoneApi.delete(numId).catch(() => {});
   }, []);
 
   const startTeleop = useCallback((robotId: string) => {
     setTeleopState({ active: true, targetRobotId: robotId, log: [{ timestamp: new Date().toLocaleTimeString(), action: 'TELEOP_START' }] });
+    // ★ API
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (!isNaN(numId)) teleopApi.start(numId).catch(() => {});
   }, []);
 
   const stopTeleop = useCallback(() => {
+    const rid = teleopState.targetRobotId;
     setTeleopState(prev => ({ ...prev, active: false, log: [...prev.log, { timestamp: new Date().toLocaleTimeString(), action: 'TELEOP_STOP' }] }));
-  }, []);
+    // ★ API
+    if (rid) {
+      const numId = parseInt(rid.replace('R-', ''));
+      if (!isNaN(numId)) teleopApi.stop(numId).catch(() => {});
+    }
+  }, [teleopState.targetRobotId]);
 
   const addTeleopLog = useCallback((action: string) => {
     setTeleopState(prev => ({ ...prev, log: [...prev.log, { timestamp: new Date().toLocaleTimeString(), action }] }));
@@ -214,10 +456,16 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const sendToMaintenance = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, status: 'HEADING_MAINTENANCE' as const, currentTarget: 'Maintenance Center', eStopActive: false, eStopSource: null } : r));
+    // ★ API
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (!isNaN(numId)) robotApi.sendCommand(numId, 'go_maintenance').catch(() => {});
   }, []);
 
   const returnToStation = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, status: 'HEADING_STATION' as const, currentTarget: 'Home Station', eStopActive: false, eStopSource: null } : r));
+    // ★ API
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (!isNaN(numId)) robotApi.sendCommand(numId, 'return_station').catch(() => {});
   }, []);
 
   return (
@@ -237,4 +485,17 @@ export function useDashboard() {
   const ctx = useContext(DashboardContext);
   if (!ctx) throw new Error('useDashboard must be used within DashboardProvider');
   return ctx;
+}
+
+/* ───── util ───── */
+function parseWkt(wkt: string): Array<{ x: number; y: number }> {
+  try {
+    const inner = wkt.replace(/POLYGON\s*\(\(/, '').replace(/\)\)/, '');
+    return inner.split(',').map(pair => {
+      const [x, y] = pair.trim().split(/\s+/).map(Number);
+      return { x: x || 0, y: y || 0 };
+    });
+  } catch {
+    return [];
+  }
 }
