@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from config/ directory
-_env_file = Path(__file__).parent.parent.parent / "config" / ".env"
+_env_file = Path(__file__).parent.parent.parent / ".env"
 if _env_file.exists():
     load_dotenv(_env_file)
 
