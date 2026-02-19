@@ -2,6 +2,8 @@
 malle_bot/build/
 malle_bot/install/
 malle_bot/log/
+install/
+log/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
