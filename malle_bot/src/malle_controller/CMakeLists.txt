@@ -24,6 +24,11 @@ install(DIRECTORY ${PROJECT_NAME}/
   FILES_MATCHING PATTERN "*.py"
 )
 
+# Launch 파일 설치
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
+)
+
 # Wrapper 스크립트 생성
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/test_publisher
 "#!/usr/bin/env python3

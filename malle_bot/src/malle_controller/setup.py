@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'test_publisher = malle_controller.test_publisher:main',
             'test_subscriber = malle_controller.test_subscriber:main',
+            'bridge_node = malle_controller.bridge_node:main',
         ],
     },
 )
