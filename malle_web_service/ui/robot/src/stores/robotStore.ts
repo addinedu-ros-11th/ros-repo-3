@@ -120,7 +120,7 @@ interface RobotStore {
 }
 
 const initialRobot: Robot = {
-  id: 'mall-e-1',
+  id: '1',
   name: 'Mall·E-1',
   battery: 78,
   networkStrength: 'Strong',
