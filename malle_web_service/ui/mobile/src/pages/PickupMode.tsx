@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { storeProducts as storeProductsData } from '@/data/storeProducts';
 import { useAppStore, PickupStatus } from '@/store/appStore';
 
 const pickupSteps = [
@@ -16,6 +15,7 @@ export default function PickupMode() {
   const navigate = useNavigate();
   const { 
     stores, 
+    storeProducts: storeProductsData,
     pickupOrder, 
     createPickupOrder, 
     setPickupStatus,

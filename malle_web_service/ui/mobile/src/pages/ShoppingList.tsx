@@ -1,12 +1,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store/appStore';
-import { storeProducts } from '@/data/storeProducts';
 import { toast } from 'sonner';
 
 export default function ShoppingList() {
   const navigate = useNavigate();
-  const { shoppingList, toggleProductComplete, removeFromShoppingList, addToShoppingList, stores, addToGuideQueue, pois, sessionState } = useAppStore();
+  const { shoppingList, toggleProductComplete, removeFromShoppingList, addToShoppingList, stores, storeProducts, addToGuideQueue, pois, sessionState } = useAppStore();
   const [showAddForm, setShowAddForm] = useState(false);
   const [addStep, setAddStep] = useState<'store' | 'product'>('store');
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
