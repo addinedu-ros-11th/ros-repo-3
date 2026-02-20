@@ -39,5 +39,5 @@ class Poi(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
     # relationships
-    store = relationship("Store", back_populates="poi", uselist=False)
+    store = relationship("Store", back_populates="poi", uselist=False, foreign_keys="[Store.poi_id]")
     guide_queue_items = relationship("GuideQueueItem", back_populates="poi")
