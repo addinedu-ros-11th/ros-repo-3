@@ -1,6 +1,6 @@
 """Robot management endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,7 +51,11 @@ async def update_robot_state(
     req: RobotStateUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update robot position/state (called by bridge_node or internal)."""
+    """Update robot position/state (called by bridge_node or internal).
+
+    Auto-transition: if a robot has an ASSIGNED session and starts MOVING,
+    the session is automatically advanced to APPROACHING.
+    """
     result = await db.execute(
         select(Robot).options(selectinload(Robot.state)).where(Robot.id == robot_id)
     )
@@ -63,7 +67,7 @@ async def update_robot_state(
     if not state:
         raise HTTPException(status_code=404, detail="Robot state not initialized")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Update only provided fields
     if req.x_m is not None:
@@ -91,6 +95,21 @@ async def update_robot_state(
     robot.last_seen_at = now
 
     await db.flush()
+
+    # Auto-transition ASSIGNED → APPROACHING when robot starts moving
+    from app.models.session import Session, SessionStatus
+    from app.services.session_workflow import transition_session_status
+    if req.motion_state == RobotMotionState.MOVING:
+        sess_result = await db.execute(
+            select(Session).where(
+                Session.assigned_robot_id == robot_id,
+                Session.status == SessionStatus.ASSIGNED,
+            )
+        )
+        assigned_session = sess_result.scalar_one_or_none()
+        if assigned_session:
+            await transition_session_status(db, assigned_session, SessionStatus.APPROACHING)
+
     await db.refresh(robot)
     await db.refresh(state)
 
@@ -124,7 +143,7 @@ async def trigger_estop(
     if not state:
         raise HTTPException(status_code=404, detail="Robot state not initialized")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     state.stop_state = RobotStopState.ESTOP
     state.stop_source = req.source
     state.stop_updated_at = now
@@ -167,7 +186,7 @@ async def release_estop(robot_id: int, db: AsyncSession = Depends(get_db)):
     if not state:
         raise HTTPException(status_code=404, detail="Robot state not initialized")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     state.stop_state = RobotStopState.NONE
     state.stop_source = None
     state.stop_updated_at = now
