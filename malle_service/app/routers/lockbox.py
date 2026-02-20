@@ -2,7 +2,7 @@
 
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -134,7 +134,7 @@ async def create_lockbox_token(
         session_id=req.session_id,
         slot_id=req.slot_id,
         token=token_str,
-        expires_at=datetime.utcnow() + timedelta(minutes=5),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     db.add(token)
     await db.flush()
@@ -160,16 +160,20 @@ async def verify_lockbox_token(
     if not token:
         raise HTTPException(status_code=400, detail="Invalid or used token")
 
-    if datetime.utcnow() > token.expires_at:
+    if datetime.now(timezone.utc) > token.expires_at:
         raise HTTPException(status_code=400, detail="Token expired")
 
-    token.used_at = datetime.utcnow()
+    token.used_at = datetime.now(timezone.utc)
     await db.flush()
 
-    # If token has a slot, trigger open
+    # If token has a slot, open it: update status + log + WS
     if token.slot_id:
         slot = await db.get(LockboxSlot, token.slot_id)
         if slot:
+            # Mark slot as EMPTY (customer retrieved items) or keep FULL until confirmed
+            # For pickup delivery the customer opens it to take goods → PICKEDUP
+            slot.status = LockboxSlotStatus.PICKEDUP
+
             log = LockboxOpenLog(
                 robot_id=robot_id,
                 slot_id=slot.id,
@@ -180,5 +184,18 @@ async def verify_lockbox_token(
             )
             db.add(log)
             await db.flush()
+
+            # WS broadcast
+            slots = await _get_slots(db, robot_id)
+            await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_OPENED, {
+                "slot_no": slot.slot_no, "actor": LockboxActor.CUSTOMER.value,
+            })
+            await manager.send_to_mobile(req.session_id, WsEvent.LOCKBOX_OPENED, {
+                "slot_no": slot.slot_no, "actor": LockboxActor.CUSTOMER.value,
+            })
+            await manager.send_to_dashboard(WsEvent.LOCKBOX_OPENED, {
+                "robot_id": robot_id, "slot_no": slot.slot_no, "actor": LockboxActor.CUSTOMER.value,
+            })
+            await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
 
     return {"ok": True, "verified": True}

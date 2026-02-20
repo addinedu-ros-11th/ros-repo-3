@@ -1,7 +1,7 @@
 # malle_service/services/time_estimator.py
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +10,7 @@ from app.models.guide import GuideQueueItem, GuideItemStatus
 from app.models.poi import Poi
 from app.models.robot import RobotStateCurrent
 
-AVG_ROBOT_SPEED_M_PER_SEC = 0.5  # 평균 속도 (m/s)
-POI_STOP_TIME_SEC = 30  # POI당 정지 시간 (초)
+from app.config import AVG_ROBOT_SPEED_M_PER_SEC, POI_STOP_TIME_SEC
 
 
 async def estimate_session_completion(
@@ -40,7 +39,7 @@ async def estimate_session_completion(
     queue_with_pois = result.all()
 
     if not queue_with_pois:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
 
     # 2. 로봇 현재 위치
     robot_state = await db.get(RobotStateCurrent, robot_id)
@@ -64,7 +63,7 @@ async def estimate_session_completion(
     stop_time_sec = len(queue_with_pois) * POI_STOP_TIME_SEC
     total_time_sec = travel_time_sec + stop_time_sec
 
-    return datetime.utcnow() + timedelta(seconds=total_time_sec)
+    return datetime.now(timezone.utc) + timedelta(seconds=total_time_sec)
 
 
 async def estimate_travel_time(

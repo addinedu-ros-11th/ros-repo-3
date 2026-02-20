@@ -1,6 +1,6 @@
 """Session management endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -66,7 +66,12 @@ async def update_session_status(
     req: SessionStatusUpdateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update session status (ASSIGNED→APPROACHING→MATCHING→ACTIVE→ENDED)."""
+    """Update session status (ASSIGNED→APPROACHING→MATCHING→ACTIVE→ENDED).
+
+    APPROACHING is triggered by bridge_node when the robot starts moving toward the customer.
+    In demo/dev, call this endpoint manually:
+      PATCH /api/v1/sessions/{id}/status  { "status": "APPROACHING" }
+    """
     session = await db.get(Session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -92,7 +97,7 @@ async def verify_pin(
             detail=f"Session not in MATCHING state (current: {session.status})",
         )
 
-    if session.pin_expires_at and datetime.utcnow() > session.pin_expires_at:
+    if session.pin_expires_at and datetime.now(timezone.utc) > session.pin_expires_at:
         raise HTTPException(status_code=400, detail="PIN expired")
 
     if session.match_pin != req.pin:
@@ -116,7 +121,7 @@ async def set_follow_tag(
 
     session.follow_tag_code = req.tag_code
     session.follow_tag_family = req.tag_family
-    session.follow_tag_set_at = datetime.utcnow()
+    session.follow_tag_set_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(session)
 

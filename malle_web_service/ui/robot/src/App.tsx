@@ -19,9 +19,23 @@ import { useWsHandler } from "@/ws/useWsHandler";
 
 const queryClient = new QueryClient();
 
-/** WS 연결을 담당하는 내부 컴포넌트 */
+// Robot ID comes from VITE_ROBOT_ID env var (set per-device in .env.local).
+// Falls back to '1' for dev convenience.
+const ROBOT_ID = import.meta.env.VITE_ROBOT_ID ?? "1";
+
+/** WS 연결 + 서버에서 로봇 초기 상태 fetch */
 function RobotInit() {
   const robotId = useRobotStore((s) => s.robot.id);
+
+  useEffect(() => {
+    // 앱 시작 시 store에 실제 robot ID 세팅 (env에서 읽은 값)
+    if (robotId !== ROBOT_ID) {
+      useRobotStore.setState((s) => ({
+        robot: { ...s.robot, id: ROBOT_ID, name: `Mall·E-${ROBOT_ID}` },
+        currentRobotId: Number(ROBOT_ID),
+      }));
+    }
+  }, []);
 
   // 로봇은 항상 WS 연결 (robotId는 고정)
   useWsHandler(robotId);
