@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { sessionApi } from '@/api/sessions';
 import { guideApi } from '@/api/guide';
 import { pickupApi, lockboxApi, storeApi, poiApi, type PoiRes, type StoreRes } from '@/api/services';
+import { storeProducts as hardcodedStoreProducts } from '@/data/storeProducts';
 
 export type SessionState = 'NO_SESSION' | 'FINDING_ROBOT' | 'ROBOT_ASSIGNED' | 'APPROACHING' | 'PIN_MATCHING' | 'ACTIVE' | 'ENDED';
 export type RobotMode = 'GUIDE' | 'FOLLOW' | 'PICKUP' | null;
@@ -142,6 +143,7 @@ interface AppState {
   searchState: SearchState;
   stores: Store[];
   pois: POI[];
+  storeProducts: Record<string, { name: string; option: string; price: number }[]>;
 
   /** ★ App mount 시 서버에서 stores/pois fetch */
   initFromServer: () => Promise<void>;
@@ -282,6 +284,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   searchState: { query: '', filter: 'All', results: initialStores, isOpen: false },
   stores: initialStores,
   pois: initialPOIs,
+  storeProducts: hardcodedStoreProducts,
 
   /* ★ 서버에서 stores/pois 로드 (App mount 시 1회) */
   initFromServer: async () => {
@@ -293,6 +296,26 @@ export const useAppStore = create<AppState>((set, get) => ({
       const u: Partial<AppState> = {};
       if (sr?.length) { const m = sr.map(mapStore); u.stores = m; u.searchState = { ...get().searchState, results: m }; }
       if (pr?.length) u.pois = pr.map(mapPoi);
+
+      // ★ store별 products fetch (DB 연결 시)
+      if (sr?.length) {
+        const productsMap: Record<string, { name: string; option: string; price: number }[]> = {};
+        const results = await Promise.all(
+          sr.map(s => storeApi.getProducts(s.id).catch(() => null))
+        );
+        sr.forEach((s, i) => {
+          const products = results[i];
+          if (products?.length) {
+            productsMap[String(s.id)] = products.map(p => ({
+              name: p.name,
+              option: p.sku || '',
+              price: p.price,
+            }));
+          }
+        });
+        if (Object.keys(productsMap).length) u.storeProducts = productsMap;
+      }
+
       if (Object.keys(u).length) set(u);
     } catch { /* fallback data 유지 */ }
   },
