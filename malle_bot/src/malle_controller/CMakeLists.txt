@@ -8,6 +8,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MessageHeader.msg"
   "msg/RobotMessage.msg"
+  "msg/TaskCommand.msg"
 )
 
 # Python 버전 자동 감지
