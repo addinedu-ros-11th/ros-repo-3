@@ -1,17 +1,19 @@
 """
 robot_dispatcher 테스트.
 
-GET  /robots/dispatch/status   → get_dispatch_status()
-GET  /robots/dispatch/count    → get_available_robot_count()
-POST /sessions                 → find_nearest_available_robot() 간접 검증
+GET  /robots/dispatch/status      → get_dispatch_status()
+GET  /robots/dispatch/count       → get_available_robot_count()
+POST /sessions                    → 세션 생성 + 즉시 배정 (coupled)
+POST /sessions/{id}/assign        → 배정만 단독 호출 (decoupled)
 
 시나리오:
 1. 현재 배정 현황 조회
 2. 가용 로봇 수 조회
-3. 세션 생성 → 가장 가까운 로봇 배정 확인
-4. 배터리 낮은 로봇 제외 확인
-5. 오프라인 로봇 제외 확인
-6. IDLE 아닌 로봇 제외 확인
+3. POST /sessions → 즉시 배정 확인
+4. POST /sessions/{id}/assign → 단독 배정 확인
+5. 배터리 낮은 로봇 제외 확인
+6. 오프라인 로봇 제외 확인
+7. IDLE 아닌 로봇 제외 확인
 """
 
 import random
@@ -43,24 +45,27 @@ def test_dispatch_count():
     return data.get("available_count", 0)
 
 
-def test_nearest_robot_assigned():
-    """세션 생성 시 가장 가까운 로봇이 배정되는지 확인."""
-    print("\n[dispatcher] 가장 가까운 로봇 배정 확인")
+def _randomize_robot_positions(available: list):
+    """가용 로봇들 위치를 랜덤으로 설정."""
+    for r in available:
+        x = round(random.uniform(0, 400), 1)
+        y = round(random.uniform(0, 300), 1)
+        patch(f"/robots/{r['id']}/state", {"x_m": x, "y_m": y})
+        print(f"             robot_id={r['id']} 위치 랜덤 설정 → ({x}, {y})")
 
-    # 랜덤 위치로 로봇 상태 갱신 (가용 로봇들)
-    robots = get_robots()
-    available = [r for r in robots if r["is_available"]]
+
+def test_coupled_assignment():
+    """POST /sessions → 세션 생성과 동시에 즉시 배정."""
+    print("\n[dispatcher] 세션 생성 + 즉시 배정 (POST /sessions)")
+
+    available = [r for r in get_robots() if r["is_available"]]
     print(f"             배정 전 가용 로봇: {[r['id'] for r in available]}")
 
     if not available:
         print("             [SKIP] 가용 로봇 없음")
         return None
 
-    for r in available:
-        x = round(random.uniform(0, 400), 1)
-        y = round(random.uniform(0, 300), 1)
-        patch(f"/robots/{r['id']}/state", {"x_m": x, "y_m": y})
-        print(f"             robot_id={r['id']} 위치 랜덤 설정 → ({x}, {y})")
+    _randomize_robot_positions(available)
 
     session = ok("POST /sessions", post("/sessions", {
         "user_id": USER_ID,
@@ -70,14 +75,47 @@ def test_nearest_robot_assigned():
     print(f"             배정된 robot_id={assigned_robot_id}")
 
     if assigned_robot_id:
-        print("  [PASS] 로봇 배정 성공")
+        print("  [PASS] 즉시 배정 성공")
     else:
-        print("  [FAIL] 로봇 배정 안 됨")
+        print("  [FAIL] 배정 안 됨")
 
     after_count = get("/robots/dispatch/count").json().get("available_count", 0)
     print(f"             배정 후 가용 수: {after_count} (전: {len(available)})")
 
     return session
+
+
+def test_decoupled_assignment():
+    """POST /sessions/{id}/assign → 배정만 단독 호출."""
+    print("\n[dispatcher] 단독 배정 (POST /sessions/{id}/assign)")
+
+    available = [r for r in get_robots() if r["is_available"]]
+    if not available:
+        print("             [SKIP] 가용 로봇 없음")
+        return None
+
+    _randomize_robot_positions(available)
+
+    # 세션만 생성 (즉시 배정도 시도하지만, assign 엔드포인트를 별도로 검증)
+    session = post("/sessions", {"user_id": USER_ID, "session_type": "TASK"}).json()
+    sid = session.get("id")
+    if not sid:
+        print("             [SKIP] 세션 생성 실패")
+        return None
+
+    print(f"             세션 생성: id={sid} 현재 robot={session.get('assigned_robot_id')}")
+
+    # 단독 배정 엔드포인트 호출
+    data = ok("POST /sessions/{id}/assign", post(f"/sessions/{sid}/assign"))
+    assigned_robot_id = data.get("assigned_robot_id")
+    print(f"             assign 후 robot_id={assigned_robot_id} status={data.get('status')}")
+
+    if assigned_robot_id:
+        print("  [PASS] 단독 배정 성공")
+    else:
+        print("  [WARN] 가용 로봇 없어 배정 안 됨")
+
+    return data
 
 
 def test_low_battery_excluded():
@@ -150,19 +188,26 @@ def test_non_idle_excluded():
         post(f"/sessions/{sid}/end")
 
 
+def cleanup(session: dict | None):
+    if session and session.get("id"):
+        post(f"/sessions/{session['id']}/end")
+        print(f"  (세션 {session['id']} 종료)")
+
+
 if __name__ == "__main__":
     health()
 
     test_dispatch_status()
     test_dispatch_count()
 
-    s = test_nearest_robot_assigned()
+    s1 = test_coupled_assignment()
+    cleanup(s1)
+
+    s2 = test_decoupled_assignment()
+    cleanup(s2)
+
     test_low_battery_excluded()
     test_offline_excluded()
     test_non_idle_excluded()
-
-    if s and s.get("id"):
-        post(f"/sessions/{s['id']}/end")
-        print(f"\n  (세션 {s['id']} 종료)")
 
     print("\n완료.")

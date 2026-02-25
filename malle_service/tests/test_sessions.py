@@ -68,6 +68,54 @@ def test_wrong_pin(session_id: int):
         print(f"  [FAIL] 예상 400, 실제 {resp.status_code}")
 
 
+def test_assign_robot(session_id: int):
+    print(f"\n[sessions] 로봇 배정 단독 호출 (id={session_id})")
+    before = get(f"/sessions/{session_id}").json()
+    print(f"           배정 전 robot={before.get('assigned_robot_id')} status={before.get('status')}")
+
+    data = ok("POST /sessions/{id}/assign", post(f"/sessions/{session_id}/assign"))
+    print(f"           배정 후 robot={data.get('assigned_robot_id')} status={data.get('status')}")
+
+    if data.get("assigned_robot_id"):
+        print("  [PASS] 로봇 배정 성공")
+    else:
+        print("  [WARN] 가용 로봇 없어 배정 안 됨")
+    return data
+
+
+def test_reassign_robot(session_id: int):
+    print(f"\n[sessions] 로봇 재배정 (id={session_id})")
+    before = get(f"/sessions/{session_id}").json()
+    prev_robot = before.get("assigned_robot_id")
+    print(f"           재배정 전 robot={prev_robot}")
+
+    data = ok("POST /sessions/{id}/assign (재배정)", post(f"/sessions/{session_id}/assign"))
+    new_robot = data.get("assigned_robot_id")
+    print(f"           재배정 후 robot={new_robot}")
+
+    if new_robot and new_robot != prev_robot:
+        print("  [PASS] 다른 로봇으로 재배정됨")
+    elif new_robot == prev_robot:
+        print("  [WARN] 같은 로봇 재배정 (다른 가용 로봇 없음)")
+    else:
+        print("  [WARN] 가용 로봇 없어 배정 안 됨")
+
+
+def test_assign_ended_session():
+    print("\n[sessions] 종료된 세션에 배정 시도 (400 기대)")
+    s = post("/sessions", {"user_id": USER_ID, "session_type": "TASK"}).json()
+    sid = s.get("id")
+    if not sid:
+        print("  [SKIP] 세션 생성 실패")
+        return
+    post(f"/sessions/{sid}/end")
+    resp = post(f"/sessions/{sid}/assign")
+    if resp.status_code == 400:
+        print("  [PASS] ENDED 세션 배정 거부 (400)")
+    else:
+        print(f"  [FAIL] 예상 400, 실제 {resp.status_code}")
+
+
 def test_follow_tag(session_id: int):
     print(f"\n[sessions] follow-tag 설정 (id={session_id})")
     ok("PATCH follow-tag", patch(f"/sessions/{session_id}/follow-tag", {
@@ -79,7 +127,6 @@ def test_follow_tag(session_id: int):
 if __name__ == "__main__":
     health()
 
-    # 세션 생성
     s1 = test_create_session()
     s2 = test_create_time_session()
 
@@ -93,9 +140,13 @@ if __name__ == "__main__":
 
     if s2.get("id"):
         sid2 = s2["id"]
+        test_assign_robot(sid2)
+        test_reassign_robot(sid2)
         test_wrong_pin(sid2)
         test_follow_tag(sid2)
         post(f"/sessions/{sid2}/end")
         print(f"  (세션 {sid2} 종료)")
+
+    test_assign_ended_session()
 
     print("\n완료.")
