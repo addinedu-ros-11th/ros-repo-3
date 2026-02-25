@@ -1,7 +1,11 @@
+#!/usr/bin/env python3
+
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import String
 from pinky_interfaces.srv import SetLed, Emotion
+
 import cv2
 import numpy as np
 import threading
@@ -11,10 +15,12 @@ from picamera2 import Picamera2
 from libcamera import Transform
 from pupil_apriltags import Detector
 
-# [1. Flask 설정]
+# ==========================================
+# [1. Flask & Camera 전역 설정]
+# ==========================================
 app = Flask(__name__)
 
-# [2. 카메라 설정]
+# 카메라 초기화
 picam2 = Picamera2()
 config = picam2.create_video_configuration(
     main={"size": (320, 240), "format": "RGB888"},
@@ -44,35 +50,60 @@ def gen_frames():
 def video_feed():
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# [3. 로봇 제어 노드]
-class PinkyController(Node):
+# 카메라 캡처 스레드 함수
+def capture_thread():
+    global global_frame, latest_gray_frame
+    while True:
+        frame = picam2.capture_array()
+        latest_gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        with frame_lock: global_frame = buffer.tobytes()
+        time.sleep(0.01)
+
+
+# ==========================================
+# [2. 통합된 ROS2 제어 노드]
+# ==========================================
+class MissionFollowNode(Node):
+
     def __init__(self):
-        super().__init__('pinky_ultra_node')
+        super().__init__('mission_follow')
+
+        # Publisher & Subscriber
+        self.cmd_pub    = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.result_pub = self.create_publisher(String, '/malle/mission_result', 10)
+        self.trigger_sub = self.create_subscription(String, '/malle/mission_trigger', self._on_trigger, 10)
         
-        self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        # Service Clients (Pinky LED/Emotion)
         self.led_client = self.create_client(SetLed, '/set_led')
         self.emotion_client = self.create_client(Emotion, '/set_emotion')
-        
+
+        # AprilTag 디텍터
         self.detector = Detector(families='tag36h11', nthreads=4)
-        
+
+        # 상태 변수 초기화
+        self.active = False
         self.state = "IDLE"
-        self.target_id = -1
+        self.target_id = 0 # 기본 추종할 태그 ID (trigger에서 변경 가능)
         self.last_seen_direction = 1.0
         self.lost_time = None
-        self.first_run = True 
+        self.start_time = 0.0
         
-        # --- [코너링 최적화 파라미터] ---
-        self.target_dist = 0.08         # 20cm로 늘려 여유 공간 확보 (내륜차 해결 핵심)
+        # [코너링 최적화 파라미터]
+        self.target_dist = 0.08
         self.linear_speed = 0.10        
-        self.kp = 20.0                  # 회전 민감도를 살짝 낮춤
-        self.kd = 3.5                   # D 게인을 높여서 회전을 묵직하게
+        self.kp = 20.0                  
+        self.kd = 3.5                   
         self.last_error_x = 0.0         
         self.max_angular = 15.0         
         self.search_turn_speed = 1.5    
-        # -------------------------------
 
+        # 초기 표정 설정
         self.set_emotion("hello")
-        self.timer = self.create_timer(0.02, self.control_loop)
+        
+        # 제어 루프 타이머
+        self.create_timer(0.02, self._control_loop)
 
     def set_led(self, r, g, b):
         if self.led_client.service_is_ready():
@@ -86,21 +117,54 @@ class PinkyController(Node):
             req.emotion = name
             self.emotion_client.call_async(req)
 
-    def control_loop(self):
-        global latest_gray_frame
-        twist = Twist()
-        
-        if self.state == "IDLE": return
+    def _on_trigger(self, msg: String):
+        # Trigger 명령: "start_follow" 또는 "start_follow_N" (N은 태그 ID)
+        if msg.data.startswith('start_follow'):
+            self.active = True
+            
+            # 태그 ID 파싱 (ex: 'start_follow_5' 이면 ID 5를 추적)
+            parts = msg.data.split('_')
+            if len(parts) == 3 and parts[2].isdigit():
+                self.target_id = int(parts[2])
+            else:
+                self.target_id = 0 # 기본 ID
+            
+            self.get_logger().info(f"Started following target ID: {self.target_id}")
+            
+            # 시작 상태 초기화 (기존 코드의 BACKING 로직 적용)
+            self.state = "BACKING"
+            self.start_time = time.time()
+            self.set_led(255, 0, 0)
+            self.set_emotion("basic")
 
+        elif msg.data == 'idle':
+            self.get_logger().info("Mission Idle requested.")
+            self.active = False
+            self.state = "IDLE"
+            self.cmd_pub.publish(Twist())  # 즉시 정지
+            self.set_led(0, 0, 0)          # LED 끄기
+            self.set_emotion("hello")
+
+    def _control_loop(self):
+        global latest_gray_frame
+        
+        if not self.active or self.state == "IDLE":
+            return
+            
+        twist = Twist()
+
+        # 1. 초기 후진 로직
         if self.state == "BACKING":
             if time.time() - self.start_time < 7.0:
                 twist.linear.x = -0.1
             else:
                 self.state = "SEARCHING"
-                self.first_run = False
-                self.set_led(0, 0, 255); self.set_emotion("interest")
-            self.cmd_pub.publish(twist); return
+                self.set_led(0, 0, 255)
+                self.set_emotion("interest")
+            self.cmd_pub.publish(twist)
+            return
 
+        # 2. 태그 인식 및 추종 로직
         if latest_gray_frame is not None:
             tags = self.detector.detect(latest_gray_frame, estimate_tag_pose=True, 
                                         camera_params=(285, 285, 160, 120), tag_size=0.04)
@@ -110,7 +174,8 @@ class PinkyController(Node):
                 self.lost_time = None
                 if self.state == "SEARCHING":
                     self.state = "FOLLOWING"
-                    self.set_led(0, 255, 0); self.set_emotion("fun")
+                    self.set_led(0, 255, 0)
+                    self.set_emotion("fun")
 
                 tx, tz = float(target.pose_t[0]), float(target.pose_t[2])
                 self.last_seen_direction = 1.0 if tx < 0 else -1.0
@@ -120,74 +185,69 @@ class PinkyController(Node):
                 error_diff = current_error - self.last_error_x
                 angular_vel = (current_error * self.kp) + (error_diff * self.kd)
                 
-                # [지연 회전 알고리즘]
-                # 태그가 옆으로 많이 치우쳤을 때(급코너) 로직
+                # [지연 회전 알고리즘 / 코너링 최적화]
                 is_sharp_turn = abs(tx) > 0.12
-                
                 proximity_boost = 1.0 + (0.05 / (tz + 0.05))
                 raw_angular = angular_vel * proximity_boost
 
                 if is_sharp_turn:
-                    # 1. 태그가 옆에 있어도 즉시 꺾지 않고 전진 속도를 유지하여 '크게' 돌게 함
-                    twist.linear.x = 0.10  # 최소 전진 속도 확보
-                    # 2. 회전력을 원래의 70% 수준으로 억제하여 즉각적인 꺾임 방지
+                    twist.linear.x = 0.10
                     twist.angular.z = float(np.clip(raw_angular * 0.7, -self.max_angular, self.max_angular))
                 else:
-                    # 일반 주행 시
                     twist.linear.x = self.linear_speed if tz > self.target_dist + 0.02 else 0.0
                     twist.angular.z = float(np.clip(raw_angular, -self.max_angular, self.max_angular))
 
-                # 거리 제어 보정
                 if tz <= self.target_dist:
-                    # 너무 가까우면 회전만 하되, 급코너 중이면 살짝 전진해서 빠져나옴
                     twist.linear.x = 0.08 if is_sharp_turn else 0.0
+                    
+                    # (선택) 목적지에 안정적으로 도달했다면 Result를 Publish 할 수 있습니다.
+                    # self._publish_result('success')
                 
                 self.last_error_x = current_error 
             
             else:
-                # 태그 상실 시 로직 (기존과 동일)
+                # 태그 상실 시 로직
                 if self.state == "FOLLOWING":
-                    if self.lost_time is None: self.lost_time = time.time()
+                    if self.lost_time is None: 
+                        self.lost_time = time.time()
+                    
                     if time.time() - self.lost_time > 5.0:
                         self.state = "SEARCHING"
-                        self.set_led(0, 0, 255); self.set_emotion("interest")
+                        self.set_led(0, 0, 255)
+                        self.set_emotion("interest")
                     else:
-                        twist.linear.x = 0.0; twist.angular.z = 0.0
+                        twist.linear.x = 0.0
+                        twist.angular.z = 0.0
                 elif self.state == "SEARCHING":
                     twist.angular.z = self.search_turn_speed * self.last_seen_direction
         
         self.cmd_pub.publish(twist)
 
-# [4. 스레드 실행]
-def capture_thread():
-    global global_frame, latest_gray_frame
-    while True:
-        frame = picam2.capture_array()
-        latest_gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        with frame_lock: global_frame = buffer.tobytes()
-        time.sleep(0.01)
+    def _publish_result(self, result: str):
+        msg = String()
+        msg.data = result
+        self.result_pub.publish(msg)
 
-def input_thread(node):
-    while rclpy.ok():
-        val = input("\n[Pinky Delayed Turn] Enter Tag ID (0-15): ")
-        if val.strip().isdigit():
-            node.target_id = int(val)
-            if node.first_run:
-                node.state = "BACKING"; node.start_time = time.time()
-                node.set_led(255, 0, 0); node.set_emotion("basic")
-            else:
-                node.state = "SEARCHING"; node.set_led(0, 0, 255); node.set_emotion("interest")
-
+# ==========================================
+# [3. 메인 실행부]
+# ==========================================
 def main():
     rclpy.init()
-    node = PinkyController()
+    node = MissionFollowNode()
+    
+    # 카메라 캡처 및 웹 스트리밍 스레드 시작
     threading.Thread(target=capture_thread, daemon=True).start()
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False), daemon=True).start()
-    threading.Thread(target=input_thread, args=(node,), daemon=True).start()
-    try: rclpy.spin(node)
-    except: pass
-    finally: node.set_emotion("hello"); rclpy.shutdown(); picam2.stop()
+    
+    try: 
+        rclpy.spin(node)
+    except KeyboardInterrupt: 
+        pass
+    finally: 
+        node.set_emotion("hello")
+        node.destroy_node()
+        rclpy.shutdown()
+        picam2.stop()
 
-if __name__ == '__main__': main()
+if __name__ == '__main__': 
+    main()
