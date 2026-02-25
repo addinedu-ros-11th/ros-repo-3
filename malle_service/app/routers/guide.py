@@ -1,6 +1,6 @@
 """Guide mode endpoints."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from app.models.mission import Mission, MissionType, MissionStatus
 from app.models.poi import Poi
 from app.ws.manager import manager
 from app.ws.events import WsEvent
+from app.utils.bridge import send_to_bridge
 
 router = APIRouter()
 
@@ -145,7 +146,7 @@ async def update_guide_item_status(
 
     item.status = req.status
     if req.status in (GuideItemStatus.DONE, GuideItemStatus.SKIPPED):
-        item.completed_at = datetime.utcnow()
+        item.completed_at = datetime.now(timezone.utc)
 
     await db.flush()
     await db.refresh(item)
@@ -212,7 +213,7 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
             robot_id=session.assigned_robot_id,
             type=MissionType.GUIDE,
             status=MissionStatus.RUNNING,
-            started_at=datetime.utcnow(),
+            started_at=datetime.now(timezone.utc),
         )
         db.add(mission)
         await db.flush()
@@ -245,6 +246,18 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
         "item_id": first_item.id,
         "poi_name": poi.name if poi else None,
     })
+
+    # bridge_node → ROS2 Nav2: 첫 번째 POI 좌표로 이동 명령
+    # wait_point가 있으면 사용 (매장 앞 대기 위치), 없으면 POI 직접 좌표
+    if poi:
+        nav_x = float(poi.wait_x_m) if poi.wait_x_m is not None else float(poi.x_m)
+        nav_y = float(poi.wait_y_m) if poi.wait_y_m is not None else float(poi.y_m)
+        await send_to_bridge("navigate", {
+            "robot_id": session.assigned_robot_id,
+            "x": nav_x,
+            "y": nav_y,
+            "theta": 0.0,  # 도착 방향 — 필요 시 poi 테이블에 heading 컬럼 추가
+        })
 
     return {"ok": True, "mission_id": mission.id, "executing_count": len(pending)}
 
