@@ -82,7 +82,8 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
     case "GUIDE_QUEUE_UPDATED": {
       // payload: { queue: GuideQueueItemRes[] }
       const queue: GuideDestination[] = (p.queue || []).map((item: any) => ({
-        id: String(item.id),
+        id: String(item.id),           // 서버 item id를 UI id로도 사용 (일관성)
+        serverItemId: item.id as number, // DELETE/PATCH용 숫자 id
         poiId: String(item.poi_id),
         poiName: item.poi_name || `POI #${item.poi_id}`,
         floor: "Level 1",
@@ -165,7 +166,6 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
       break;
 
     case "ROBOT_ESTOP":
-      // 긴급정지 — 모든 모드 중단, UI에서 알림 표시용
       useAppStore.setState((s) => ({
         robot: s.robot ? { ...s.robot, mode: null } : null,
         followMe: s.followMe.active ? { ...s.followMe, status: "STOPPED" as FollowStatus } : s.followMe,
@@ -174,7 +174,6 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
       break;
 
     case "ROBOT_ESTOP_RELEASED":
-      // 긴급정지 해제 — 이전 모드 자동 복구는 서버가 별도 이벤트로 처리
       console.log("[WS] ROBOT E-STOP released");
       break;
 

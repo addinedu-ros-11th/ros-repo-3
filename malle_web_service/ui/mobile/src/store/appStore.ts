@@ -38,6 +38,7 @@ export interface TaskMission {
 
 export interface GuideDestination {
   id: string;
+  serverItemId: number | null;  // 서버 guide_queue_item.id (DELETE/PATCH용)
   poiId: string;
   poiName: string;
   floor: string;
@@ -122,7 +123,6 @@ interface AppState {
   userName: string;
   userPhone: string;
 
-  /** ★ 서버 연동용 ID */
   currentSessionId: number | null;
   currentRobotId: number | null;
   matchPin: string | null;
@@ -145,7 +145,6 @@ interface AppState {
   pois: POI[];
   storeProducts: Record<string, { name: string; option: string; price: number }[]>;
 
-  /** ★ App mount 시 서버에서 stores/pois fetch */
   initFromServer: () => Promise<void>;
 
   setUserName: (name: string) => void;
@@ -189,7 +188,6 @@ interface AppState {
   setSearchQuery: (query: string) => void;
   setSearchFilter: (filter: string) => void;
 
-  /** ★ WS 핸들러 전용 */
   _setGuideQueueFromServer: (queue: GuideDestination[]) => void;
   _updateRobotState: (data: { battery_pct?: number; x_m?: number; y_m?: number }) => void;
 }
@@ -297,7 +295,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (sr?.length) { const m = sr.map(mapStore); u.stores = m; u.searchState = { ...get().searchState, results: m }; }
       if (pr?.length) u.pois = pr.map(mapPoi);
 
-      // ★ store별 products fetch (DB 연결 시)
       if (sr?.length) {
         const productsMap: Record<string, { name: string; option: string; price: number }[]> = {};
         const results = await Promise.all(
@@ -325,16 +322,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setUserName: (name) => set({ userName: name }),
 
   startFindingRobot: (type, duration) => {
-    // Optimistic UI: show spinner immediately
     set({ sessionState: 'FINDING_ROBOT', session: { type, duration, remainingTime: duration * 60, startedAt: null }, approachingEta: 10 });
-    // POST /sessions — server assigns robot synchronously and returns full state.
-    // We must read the REST response directly because the WS SESSION_ASSIGNED event
-    // fires before the client has connected to /ws/mobile/{session_id}.
     sessionApi.create({ user_id: 1, session_type: type, requested_minutes: type === 'TIME' ? duration : undefined })
       .then((res) => {
         set({ currentSessionId: res.id, matchPin: res.match_pin });
         if (res.assigned_robot_id) {
-          // Robot was assigned synchronously — apply state from REST response directly.
           set({
             currentRobotId: res.assigned_robot_id,
             sessionState: 'APPROACHING',
@@ -347,8 +339,6 @@ export const useAppStore = create<AppState>((set, get) => ({
             },
           });
         }
-        // If status is still REQUESTED (no robot available), stay in FINDING_ROBOT.
-        // The WS SESSION_ASSIGNED event will update state when a robot becomes free.
       }).catch((e) => {
         console.error('[API] session create:', e);
         set({ sessionState: 'NO_SESSION' });
@@ -363,7 +353,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (state.session.type === 'TASK' && state.taskMission) {
       if (state.taskMission.type === 'GUIDE' && state.taskMission.destinationPoi) {
         const poi = state.taskMission.destinationPoi;
-        updates.guideQueue = [{ id: `guide-task-${Date.now()}`, poiId: poi.id, poiName: poi.name, floor: 'Level 1', estimatedTime: Math.floor(Math.random() * 5) + 2, status: 'PENDING', selected: true }];
+        updates.guideQueue = [{
+          id: `guide-task-${Date.now()}`,
+          serverItemId: null,
+          poiId: poi.id,
+          poiName: poi.name,
+          floor: 'Level 1',
+          estimatedTime: Math.floor(Math.random() * 5) + 2,
+          status: 'PENDING',
+          selected: true,
+        }];
         updates.robot = state.robot ? { ...state.robot, mode: 'GUIDE' } : null;
         if (state.currentSessionId) guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
       } else if (state.taskMission.type === 'PICKUP' && state.taskMission.storeId && state.taskMission.items) {
@@ -392,30 +391,68 @@ export const useAppStore = create<AppState>((set, get) => ({
   /* ───── Guide ───── */
 
   addToGuideQueue: (poi) => {
-    set((s) => ({ guideQueue: [...s.guideQueue, { id: `guide-${Date.now()}`, poiId: poi.id, poiName: poi.name, floor: 'Level 1', estimatedTime: Math.floor(Math.random() * 5) + 2, status: 'PENDING', selected: true }] }));
+    const localId = `guide-${Date.now()}`;
+    // 낙관적 UI 업데이트 (serverItemId는 API 응답 후 채움)
+    set((s) => ({
+      guideQueue: [...s.guideQueue, {
+        id: localId,
+        serverItemId: null,
+        poiId: poi.id,
+        poiName: poi.name,
+        floor: 'Level 1',
+        estimatedTime: Math.floor(Math.random() * 5) + 2,
+        status: 'PENDING',
+        selected: true,
+      }]
+    }));
     const { currentSessionId } = get();
-    if (currentSessionId) guideApi.addToQueue(currentSessionId, Number(poi.id)).catch(() => {});
+    if (currentSessionId) {
+      guideApi.addToQueue(currentSessionId, Number(poi.id))
+        .then((res) => {
+          // 서버 item id를 localId로 찾아서 업데이트
+          set((s) => ({
+            guideQueue: s.guideQueue.map((i) =>
+              i.id === localId ? { ...i, serverItemId: res.id } : i
+            )
+          }));
+        })
+        .catch(() => {});
+    }
   },
+
   removeFromGuideQueue: (id) => {
+    // 삭제 전에 serverItemId 먼저 조회
+    const item = get().guideQueue.find((i) => i.id === id);
     set((s) => ({ guideQueue: s.guideQueue.filter((i) => i.id !== id) }));
     const { currentSessionId } = get();
-    if (currentSessionId && !isNaN(Number(id))) guideApi.removeFromQueue(currentSessionId, Number(id)).catch(() => {});
+    if (currentSessionId && item?.serverItemId) {
+      guideApi.removeFromQueue(currentSessionId, item.serverItemId).catch(() => {});
+    }
   },
-  toggleGuideSelection: (id) => set((s) => ({ guideQueue: s.guideQueue.map((i) => i.id === id ? { ...i, selected: !i.selected } : i) })),
+
+  toggleGuideSelection: (id) => set((s) => ({
+    guideQueue: s.guideQueue.map((i) => i.id === id ? { ...i, selected: !i.selected } : i)
+  })),
+
   clearGuideQueue: () => {
     set({ guideQueue: [] });
     const { currentSessionId } = get();
     if (currentSessionId) guideApi.clear(currentSessionId).catch(() => {});
   },
+
   startGuide: () => {
     set((s) => {
       const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
       if (!f) return s;
-      return { guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' } : i), robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null };
+      return {
+        guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i),
+        robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null,
+      };
     });
     const { currentSessionId } = get();
     if (currentSessionId) guideApi.execute(currentSessionId).catch(() => {});
   },
+
   completeCurrentGuide: () => set((s) => {
     const cur = s.guideQueue.find((i) => i.status === 'IN_PROGRESS');
     if (!cur) return s;
@@ -423,6 +460,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const nxt = updated.find((i) => i.selected && i.status === 'PENDING');
     return { guideQueue: nxt ? updated.map((i) => i.id === nxt.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i) : updated };
   }),
+
   _setGuideQueueFromServer: (queue) => set({ guideQueue: queue }),
 
   /* ───── Follow ───── */
