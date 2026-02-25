@@ -19,7 +19,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# lib/
 lib64/
 parts/
 sdist/
@@ -141,6 +141,7 @@ celerybeat.pid
 
 # Environments
 .env
+.env.development
 .envrc
 .venv
 env/
@@ -210,3 +211,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+.DS_Store
+
+.claude/
+claude.md
