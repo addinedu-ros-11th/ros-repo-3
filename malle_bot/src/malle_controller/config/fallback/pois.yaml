@@ -1,0 +1,46 @@
+# config/fallback/pois.yaml
+# 서버 연결 실패 시 PoiManager 가 사용하는 fallback POI 목록.
+# poi_manager.py 의 _load_fallback() 참고.
+
+pois:
+  - id: entrance
+    name: "입구"
+    x: 0.0
+    y: 0.0
+    yaw: 0.0
+    zone_id: zone_lobby
+
+  - id: cafe_a
+    name: "카페 A"
+    x: 3.5
+    y: 1.2
+    yaw: 1.5708
+    zone_id: zone_f1
+
+  - id: cafe_b
+    name: "카페 B"
+    x: 6.0
+    y: 1.2
+    yaw: 1.5708
+    zone_id: zone_f1
+
+  - id: store_a
+    name: "매장 A"
+    x: 3.5
+    y: 5.0
+    yaw: 3.1416
+    zone_id: zone_f1
+
+  - id: meetup_lobby
+    name: "meet-up 로비"
+    x: 1.0
+    y: 0.5
+    yaw: 0.0
+    zone_id: zone_lobby
+
+  - id: charging_dock
+    name: "충전 스테이션"
+    x: -1.0
+    y: -0.5
+    yaw: 3.1416
+    zone_id: zone_back
