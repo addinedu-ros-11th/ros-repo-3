@@ -4,19 +4,20 @@
 """
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.session import Session, SessionType, SessionStatus
-from app.models.robot import Robot, RobotMode
+from app.models.robot import Robot, RobotMode, RobotStateCurrent
 from app.models.poi import Poi
+from app.models.user import User
 from app.services.robot_dispatcher import find_nearest_available_robot
 from app.services.time_estimator import estimate_travel_time
 from app.ws.manager import manager
 from app.ws.events import WsEvent
-from app.schemas.session import SessionResponse
+from app.schemas.session import SessionResponse, SessionAssignedPayload
 
 
 def _generate_pin(length: int = 4) -> str:
@@ -49,7 +50,7 @@ async def create_session_with_assignment(
         requested_minutes=requested_minutes,
         status=SessionStatus.REQUESTED,
         match_pin=pin,
-        pin_expires_at=datetime.utcnow() + timedelta(minutes=10),
+        pin_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
     )
     db.add(session)
     await db.flush()
@@ -85,17 +86,35 @@ async def create_session_with_assignment(
         # ETA 계산
         eta_sec = await estimate_travel_time(db, robot.id, target_x, target_y)
 
-        session_data = SessionResponse.model_validate(session).model_dump(mode="json")
-        session_data["eta_sec"] = eta_sec
+        # 로봇 위치 정보
+        robot_state = await db.get(RobotStateCurrent, robot.id)
+
+        # 고객 전화번호 마스킹 (예: 010-****-5678)
+        user = await db.get(User, session.user_id)
+        masked_phone = None
+        if user and user.phone:
+            p = user.phone.replace("-", "")
+            masked_phone = f"{p[:3]}-****-{p[-4:]}" if len(p) >= 8 else user.phone
+
+        payload = SessionAssignedPayload(
+            **SessionResponse.model_validate(session).model_dump(),
+            robot_name=robot.name,
+            battery_pct=robot.battery_pct,
+            x_m=float(robot_state.x_m) if robot_state else None,
+            y_m=float(robot_state.y_m) if robot_state else None,
+            customer_phone_masked=masked_phone,
+            eta_sec=eta_sec,
+        )
+        payload_dict = payload.model_dump(mode="json")
 
         # WS 알림
         await manager.send_to_mobile(
-            session.id, WsEvent.SESSION_ASSIGNED, session_data
+            session.id, WsEvent.SESSION_ASSIGNED, payload_dict
         )
         await manager.send_to_robot(
-            robot.id, WsEvent.SESSION_ASSIGNED, session_data
+            robot.id, WsEvent.SESSION_ASSIGNED, payload_dict
         )
-        await manager.send_to_dashboard(WsEvent.SESSION_ASSIGNED, session_data)
+        await manager.send_to_dashboard(WsEvent.SESSION_ASSIGNED, payload_dict)
 
     return session
 
@@ -114,9 +133,9 @@ async def transition_session_status(
     session.status = new_status
 
     if new_status == SessionStatus.ACTIVE:
-        session.started_at = datetime.utcnow()
+        session.started_at = datetime.now(timezone.utc)
     elif new_status == SessionStatus.ENDED:
-        session.ended_at = datetime.utcnow()
+        session.ended_at = datetime.now(timezone.utc)
 
     await db.flush()
     await db.refresh(session)
@@ -130,10 +149,15 @@ async def transition_session_status(
         await manager.send_to_dashboard(WsEvent.ROBOT_APPROACHING, session_data)
 
     elif new_status == SessionStatus.MATCHING:
-        await manager.send_to_mobile(session.id, WsEvent.PIN_MATCHING, {
+        pin_payload = {
             "session_id": session.id,
             "pin": session.match_pin,
-        })
+        }
+        # 모바일: PIN 표시용
+        await manager.send_to_mobile(session.id, WsEvent.PIN_MATCHING, pin_payload)
+        # 로봇: PIN_MATCHING 상태 진입 트리거 (pin 포함)
+        if session.assigned_robot_id:
+            await manager.send_to_robot(session.assigned_robot_id, WsEvent.PIN_MATCHING, pin_payload)
 
     elif new_status == SessionStatus.ACTIVE:
         await manager.broadcast_to_session(
@@ -158,7 +182,7 @@ async def transition_session_status(
 async def end_session(db: AsyncSession, session: Session, reason: str = "user_ended") -> Session:
     """세션 종료 + 로봇 해제 + WS 알림."""
     session.status = SessionStatus.ENDED
-    session.ended_at = datetime.utcnow()
+    session.ended_at = datetime.now(timezone.utc)
 
     robot_id = session.assigned_robot_id
     if robot_id:

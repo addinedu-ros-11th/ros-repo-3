@@ -49,3 +49,26 @@ class SessionResponse(BaseModel):
 
 class SessionListResponse(BaseModel):
     sessions: list[SessionResponse]
+
+
+class SessionAssignedPayload(SessionResponse):
+    """
+    SESSION_ASSIGNED WS 이벤트 payload.
+    UI(mobile/robot)가 필요한 robot + customer 정보를 추가로 포함.
+    """
+    robot_name: str | None = None
+    battery_pct: int | None = None
+    x_m: float | None = None
+    y_m: float | None = None
+    customer_phone_masked: str | None = None
+    eta_sec: int | None = None
+
+
+class SessionAssignedPayload(SessionResponse):
+    """SESSION_ASSIGNED WS 이벤트 payload — SessionResponse + 로봇/고객 부가 정보."""
+    robot_name: str | None = None
+    battery_pct: int | None = None
+    x_m: float | None = None
+    y_m: float | None = None
+    customer_phone_masked: str | None = None
+    eta_sec: int | None = None
