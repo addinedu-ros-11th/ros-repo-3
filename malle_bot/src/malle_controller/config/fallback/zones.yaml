@@ -1,0 +1,32 @@
+# config/fallback/zones.yaml
+# 서버 연결 실패 시 ZoneManager 가 사용하는 fallback 구역 목록.
+# zone_manager.py 의 _load_fallback() 참고.
+#
+# type: rect   → x, y (좌하단), w, h
+# type: circle → cx, cy, r
+# type: polygon → points [[x,y], ...]
+
+zones:
+  - id: zone_lobby
+    name: "로비"
+    type: rect
+    x: -2.0
+    y: -1.0
+    w: 4.0
+    h: 2.5
+
+  - id: zone_f1
+    name: "1층 매장 구역"
+    type: rect
+    x: 2.0
+    y: 0.0
+    w: 6.0
+    h: 7.0
+
+  - id: zone_back
+    name: "후방 (충전/대기)"
+    type: rect
+    x: -3.0
+    y: -2.0
+    w: 2.5
+    h: 2.0

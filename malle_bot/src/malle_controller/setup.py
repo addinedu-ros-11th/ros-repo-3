@@ -24,8 +24,16 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'test_publisher = malle_controller.test_publisher:main',
-            'test_subscriber = malle_controller.test_subscriber:main',
+            'mission_executor = malle_controller.mission_executor:main',
+            'bridge_node       = malle_controller.bridge_node:main',
+
+            'mission_guide     = malle_controller.mission_guide:main',
+            'mission_follow    = malle_controller.mission_follow:main',
+            'mission_errand    = malle_controller.mission_errand:main',
+
+            'tag_tracker       = malle_controller.tag_tracker:main',
+            'lockbox_controller= malle_controller.lockbox_controller:main',
+            'battery_monitor   = malle_controller.battery_monitor:main',
         ],
     },
 )
