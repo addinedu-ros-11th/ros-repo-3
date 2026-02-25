@@ -1,16 +1,8 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
-  <arg name="robot_id"     default="malle_01"/>
-  <arg name="api_base_url" default="http://localhost:8000/api/v1"/>
-  <arg name="poll_hz"      default="1.0"/>
-
-  <!-- ===== bridge_node  –  malle_service ↔ ROS2 브릿지 ===== -->
-  <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
-        output="screen">
-    <param name="robot_id"     value="$(var robot_id)"/>
-    <param name="api_base_url" value="$(var api_base_url)"/>
-    <param name="poll_hz"      value="$(var poll_hz)"/>
-  </node>
+  <arg name="robot_id"        default="malle_01"/>
+  <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
+  <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
 
   <!-- ===== mission_executor  –  미션 상태 디스패처 ===== -->
   <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
@@ -44,8 +36,7 @@
   <!-- ===== lockbox_controller ===== -->
   <node pkg="malle_controller" exec="lockbox_controller" name="lockbox_controller"
         output="screen">
-    <!-- interface: mock | gpio | serial -->
-    <param name="interface" value="mock"/>
+    <param name="interface" value="$(var lockbox_iface)"/>
   </node>
 
   <!-- ===== battery_monitor ===== -->
