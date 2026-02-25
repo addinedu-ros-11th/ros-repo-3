@@ -4,20 +4,15 @@ bridge_node.py — ROS2 ↔ malle_service HTTP bridge.
 
 세 가지 역할:
 1. ROS2 → HTTP: odom, battery 구독 → malle_service PATCH (0.5Hz)
-2. HTTP → ROS2: FastAPI :9100 명령 수신 → cmd_vel_teleop, preempt_teleop 발행
+2. HTTP → ROS2: FastAPI :9100 명령 수신 → MissionExecutor 또는 cmd_vel 발행
 3. 카메라 MJPEG: Picamera2(pinkylib Camera) → GET /camera/{robot_id}/stream
 
 실행 (로봇마다 다른 네임스페이스/ID):
     ROBOT_NAMESPACE=malle15 ROBOT_ID=1 python3 bridge_node.py
     ROBOT_NAMESPACE=malle17 ROBOT_ID=2 python3 bridge_node.py
-    ROBOT_NAMESPACE=malle19 ROBOT_ID=3 python3 bridge_node.py
 
 네임스페이스 없이 단일 실행 (현재):
     python3 bridge_node.py   (ROBOT_NAMESPACE="" ROBOT_ID=1)
-
-의존성:
-    pip install httpx fastapi uvicorn
-    pinkylib (로봇 로컬 경로)
 """
 
 import asyncio
@@ -31,35 +26,28 @@ from typing import Optional
 import httpx
 
 # ─────────────────────────────────────────────────────────────
-# Configuration — 환경변수로 로봇별 구분
+# Configuration
 # ─────────────────────────────────────────────────────────────
 ROBOT_ID        = int(os.getenv("ROBOT_ID", "1"))
-ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "")   # "malle15", "malle17", "malle19" 또는 ""
+ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "")
 
 MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
-STATE_UPDATE_INTERVAL = 0.5   # 상태 push 주기 (초)
+STATE_UPDATE_INTERVAL = 0.5
 
 
 def _topic(name: str) -> str:
-    """네임스페이스 적용 토픽 이름 반환.
-    
-    ROBOT_NAMESPACE="malle15" → /malle15/cmd_vel_teleop
-    ROBOT_NAMESPACE=""        → /cmd_vel_teleop  (현재 단일 실행)
-    """
     if ROBOT_NAMESPACE:
         return f"/{ROBOT_NAMESPACE}/{name.lstrip('/')}"
     return f"/{name.lstrip('/')}"
 
 
-# 토픽 이름 (네임스페이스 자동 적용)
 TOPIC_ODOM           = _topic("odom")
-TOPIC_BATTERY        = _topic("battery/present")   # Float32(0~100) 가정
-TOPIC_CMD_VEL_TELEOP = _topic("cmd_vel_teleop")    # ros2 topic list 에서 확인됨
-TOPIC_PREEMPT_TELEOP = _topic("preempt_teleop")    # ros2 topic list 에서 확인됨
+TOPIC_BATTERY        = _topic("battery/present")
+TOPIC_CMD_VEL_TELEOP = _topic("cmd_vel_teleop")
+TOPIC_PREEMPT_TELEOP = _topic("preempt_teleop")
 TOPIC_TASK_COMMAND   = _topic("task_command")
 
-# 카메라 스트리밍 설정
 JPEG_QUALITY   = 70
 STREAM_MAX_FPS = 15
 CAMERA_WIDTH   = 640
@@ -80,14 +68,11 @@ except ImportError:
     print("[bridge_node] WARNING: ROS2 not available. HTTP-only mode.")
 
 # ─────────────────────────────────────────────────────────────
-# Camera import — pinkylib Camera 우선, 없으면 비활성
+# Camera import
 # ─────────────────────────────────────────────────────────────
 try:
     import cv2
     import numpy as np
-
-    # camera.py를 bridge_node.py와 같은 폴더에 복사:
-    #   cp /pinky/pinkylib/sensor/pinkylib/camera.py .
     from camera import Camera as PinkyCamera
     HAS_CAMERA = True
     print("[bridge_node] Camera: camera.py loaded")
@@ -106,16 +91,14 @@ try:
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
-    print("[bridge_node] WARNING: FastAPI not available. pip install fastapi uvicorn")
+    print("[bridge_node] WARNING: FastAPI not available.")
 
 
 # ─────────────────────────────────────────────────────────────
-# 카메라 프레임 버퍼 (카메라 스레드 ↔ asyncio HTTP 스트림 공유)
+# Camera frame buffer
 # ─────────────────────────────────────────────────────────────
 
 class CameraFrameBuffer:
-    """최신 JPEG 프레임 1장 유지 (스레드 세이프)."""
-
     def __init__(self):
         self._frame: Optional[bytes] = None
         self._lock = threading.Lock()
@@ -132,17 +115,8 @@ class CameraFrameBuffer:
 camera_buffer = CameraFrameBuffer()
 
 
-# ─────────────────────────────────────────────────────────────
-# 카메라 캡처 스레드
-# ─────────────────────────────────────────────────────────────
-
 def _camera_loop():
-    """
-    별도 스레드에서 Picamera2(pinkylib Camera)로 프레임 캡처 → JPEG 인코딩 → 버퍼 저장.
-    ROS2 토픽 불필요 — 직접 Picamera2 접근.
-    """
     if not HAS_CAMERA:
-        print("[camera] Camera not available, skipping capture loop.")
         return
 
     cam = None
@@ -153,44 +127,35 @@ def _camera_loop():
             print(f"[camera] Picamera2 started ({CAMERA_WIDTH}x{CAMERA_HEIGHT})")
 
             while True:
-                # get_frame() → numpy array (RGB888, 180도 회전 적용됨)
                 frame = cam.get_frame()
-
-                # Picamera2 RGB888 → OpenCV BGR 변환 후 JPEG 인코딩
                 frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 _, buf = cv2.imencode(
                     ".jpg", frame_bgr,
                     [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
                 )
                 camera_buffer.put(buf.tobytes())
-
-                # STREAM_MAX_FPS 이상 캡처하지 않음
                 time.sleep(1.0 / STREAM_MAX_FPS)
 
         except RuntimeError as e:
             print(f"[camera] Error: {e}. Retrying in 3s...")
             if cam:
-                try:
-                    cam.close()
-                except Exception:
-                    pass
+                try: cam.close()
+                except Exception: pass
             time.sleep(3.0)
         except Exception as e:
             print(f"[camera] Unexpected error: {e}. Retrying in 5s...")
             if cam:
-                try:
-                    cam.close()
-                except Exception:
-                    pass
+                try: cam.close()
+                except Exception: pass
             time.sleep(5.0)
 
 
 # ─────────────────────────────────────────────────────────────
-# Part 1: HTTP API server (:9100)
+# HTTP API server (:9100)
 # ─────────────────────────────────────────────────────────────
 
 if HAS_FASTAPI:
-    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.3.0")
+    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.4.0")
 
     class CommandRequest(BaseModel):
         robot_id: int
@@ -207,7 +172,19 @@ if HAS_FASTAPI:
         linear_x: float = 0.0
         angular_z: float = 0.0
 
+    class NavigateRequest(BaseModel):
+        robot_id: int
+        x: float
+        y: float
+        theta: float = 0.0
+        # 가이드 미션 컨텍스트 (서버에서 전달)
+        session_id: Optional[int] = None
+        item_id: Optional[int] = None
+        poi_name: Optional[str] = None
+
+    # ── 전역 참조 (main()에서 주입) ─────────────────────────────────────────
     _ros_node: Optional["BridgeNode"] = None
+    _mission_executor = None  # MissionExecutor 인스턴스
 
     @bridge_app.get("/health")
     async def health():
@@ -217,6 +194,7 @@ if HAS_FASTAPI:
             "namespace": ROBOT_NAMESPACE or "(none)",
             "ros2": HAS_ROS2,
             "camera": HAS_CAMERA,
+            "mission_executor": _mission_executor is not None,
             "topics": {
                 "odom":           TOPIC_ODOM,
                 "battery":        TOPIC_BATTERY,
@@ -246,28 +224,60 @@ if HAS_FASTAPI:
 
     @bridge_app.post("/bridge/teleop/cmd")
     async def teleop_cmd(req: TeleopCmdRequest):
-        """
-        malle_service ws/handlers → 이 엔드포인트 → /cmd_vel_teleop
-        고빈도 호출 (20Hz). DB 접근 없음.
-        """
         if _ros_node:
             _ros_node.publish_cmd_vel(req.linear_x, req.angular_z)
         return {"ok": True}
 
     @bridge_app.post("/bridge/navigate")
-    async def navigate_to(req: dict):
-        if _ros_node:
-            _ros_node.send_nav_goal(
-                req.get("x", 0.0),
-                req.get("y", 0.0),
-                req.get("theta", 0.0),
-            )
+    async def navigate_to(req: NavigateRequest):
+        """
+        malle_service guide.py execute_guide_queue → 이 엔드포인트 호출.
+
+        session_id + item_id가 있으면 MissionExecutor.dispatch_guide() 사용:
+          - 서버에서 전체 guide_queue를 재조회해서 순서대로 실행
+          - 각 POI 도착 시 자동으로 ARRIVED 보고
+
+        없으면 단순 좌표 이동 (x, y, theta).
+        """
+        if not _mission_executor:
+            # MissionExecutor 없는 경우 — 단순 Nav2 goal (폴백)
+            if _ros_node:
+                _ros_node.send_nav_goal(req.x, req.y, req.theta)
+            return {"ok": True, "mode": "fallback_nav"}
+
+        session_id = req.session_id
+        if session_id:
+            # 별도 스레드에서 실행 (FastAPI 이벤트루프 차단 방지)
+            def _dispatch():
+                _mission_executor.dispatch_guide(session_id)
+
+            threading.Thread(target=_dispatch, daemon=True).start()
+            return {"ok": True, "mode": "guide", "session_id": session_id}
+        else:
+            # session 없이 단순 좌표 이동
+            def _nav():
+                _mission_executor._guide._node.get_logger().info(
+                    f"[bridge] 단순 이동: ({req.x:.3f}, {req.y:.3f})"
+                )
+                from malle_controller.nav_core import NavCore
+                if hasattr(_mission_executor, 'navigate_to_pose'):
+                    _mission_executor.navigate_to_pose(req.x, req.y, req.theta)
+
+            threading.Thread(target=_nav, daemon=True).start()
+            return {"ok": True, "mode": "direct_nav"}
+
+    @bridge_app.post("/bridge/stop")
+    async def stop_mission():
+        """E-Stop 또는 세션 종료 시 모든 미션 중지."""
+        if _mission_executor:
+            _mission_executor.stop_all()
+        elif _ros_node:
+            _ros_node.publish_cmd_vel(0.0, 0.0)
         return {"ok": True}
 
-    # ── MJPEG 스트리밍 ───────────────────────────────────────
+    # ── MJPEG 스트리밍 ──────────────────────────────────────────────────────
 
     def _make_placeholder(robot_id: int) -> bytes:
-        """카메라 미연결 시 표시할 placeholder JPEG."""
         if not HAS_CAMERA:
             return b""
         import numpy as _np
@@ -281,7 +291,6 @@ if HAS_FASTAPI:
         return buf.tobytes()
 
     async def _mjpeg_gen(robot_id: int):
-        """MJPEG multipart/x-mixed-replace 스트리밍 제너레이터."""
         min_interval = 1.0 / STREAM_MAX_FPS
         loop = asyncio.get_event_loop()
 
@@ -304,12 +313,6 @@ if HAS_FASTAPI:
 
     @bridge_app.get("/camera/{robot_id}/stream")
     async def camera_stream(robot_id: int):
-        """
-        MJPEG 스트리밍.
-
-        Dashboard ManualControl URL 입력창:
-            http://<로봇IP>:9100/camera/1/stream
-        """
         return StreamingResponse(
             _mjpeg_gen(robot_id),
             media_type="multipart/x-mixed-replace; boundary=frame",
@@ -317,7 +320,6 @@ if HAS_FASTAPI:
 
     @bridge_app.get("/camera/{robot_id}/snapshot")
     async def camera_snapshot(robot_id: int):
-        """최신 프레임 1장 JPEG 반환 (연결 확인용)."""
         frame = camera_buffer.get() or _make_placeholder(robot_id)
         if not frame:
             return {"error": "No frame"}
@@ -325,13 +327,12 @@ if HAS_FASTAPI:
 
 
 # ─────────────────────────────────────────────────────────────
-# Part 2: ROS2 Node
+# ROS2 Node (상태 push + teleop publish)
 # ─────────────────────────────────────────────────────────────
 
 if HAS_ROS2:
     class BridgeNode(Node):
         def __init__(self):
-            # 네임스페이스가 있으면 노드 이름에도 반영
             node_name = f"malle_bridge_{ROBOT_NAMESPACE}" if ROBOT_NAMESPACE else "malle_bridge_node"
             super().__init__(node_name)
             self.get_logger().info(
@@ -346,18 +347,14 @@ if HAS_ROS2:
                 "speed_mps": 0.0, "battery_pct": 100,
             }
 
-            # ── 구독 ────────────────────────────────────────
             self.create_subscription(Odometry, TOPIC_ODOM, self._odom_cb, 10)
             self.create_subscription(Float32, TOPIC_BATTERY, self._battery_cb, 10)
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
 
-            # ── 퍼블리셔 ────────────────────────────────────
             self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
             self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
-            self.get_logger().info(f"  cmd_vel_teleop: {TOPIC_CMD_VEL_TELEOP}")
-            self.get_logger().info(f"  preempt_teleop: {TOPIC_PREEMPT_TELEOP}")
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
             self.get_logger().info("Bridge ready.")
@@ -377,8 +374,6 @@ if HAS_ROS2:
             self._state["speed_mps"] = round(math.sqrt(vx * vx + vy * vy), 3)
 
         def _battery_cb(self, msg: Float32):
-            # /battery/present 가 Float32(0~100) 아니면 여기 수정
-            # 전압(V)이면: self._state["battery_pct"] = int(msg.data / 12.6 * 100)
             self._state["battery_pct"] = int(msg.data)
 
         def _push_state(self):
@@ -405,16 +400,15 @@ if HAS_ROS2:
             msg.linear.x  = float(linear_x)
             msg.angular.z = float(angular_z)
             self._cmd_vel_pub.publish(msg)
-            # 이동 중일 때 preempt 신호 유지 (Nav2 자율주행 중단)
             if self._teleop_active and (linear_x != 0.0 or angular_z != 0.0):
                 self._preempt_pub.publish(Empty())
 
         def set_teleop_mode(self, active: bool):
             self._teleop_active = active
             if active:
-                self._preempt_pub.publish(Empty())  # Nav2 즉시 중단
+                self._preempt_pub.publish(Empty())
             else:
-                self._cmd_vel_pub.publish(Twist())  # 정지
+                self._cmd_vel_pub.publish(Twist())
             self.get_logger().info(f"Teleop {'ON' if active else 'OFF'}")
 
         def publish_command(self, command: str):
@@ -423,15 +417,16 @@ if HAS_ROS2:
             self._task_command_pub.publish(msg)
 
         def send_nav_goal(self, x: float, y: float, theta: float):
+            """폴백용 — MissionExecutor 없을 때만 사용."""
             import json as _j
             msg = String()
             msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
             self._task_command_pub.publish(msg)
-            self.get_logger().info(f"Nav goal: ({x:.3f}, {y:.3f})")
+            self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
 
 
 # ─────────────────────────────────────────────────────────────
-# Part 3: Main
+# Main
 # ─────────────────────────────────────────────────────────────
 
 def run_http_server():
@@ -440,13 +435,12 @@ def run_http_server():
 
 
 def main():
-    global _ros_node
+    global _ros_node, _mission_executor
 
-    # 카메라 캡처 스레드 시작 (Picamera2)
-    cam_thread = threading.Thread(target=_camera_loop, daemon=True)
-    cam_thread.start()
+    # 카메라 스레드
+    threading.Thread(target=_camera_loop, daemon=True).start()
 
-    # HTTP API 서버 스레드 시작
+    # HTTP 서버 스레드
     threading.Thread(target=run_http_server, daemon=True).start()
 
     print(f"[bridge_node] robot_id={ROBOT_ID}  namespace='{ROBOT_NAMESPACE or '(none)'}'")
@@ -455,15 +449,34 @@ def main():
 
     if HAS_ROS2:
         rclpy.init()
-        node = BridgeNode()
-        _ros_node = node
+
+        # BridgeNode (상태 push + teleop)
+        bridge = BridgeNode()
+        _ros_node = bridge
+
+        # MissionExecutor (Nav2 ActionClient 포함)
         try:
-            rclpy.spin(node)
+            from malle_controller.mission_executor import MissionExecutor
+            executor = MissionExecutor(api_base_url=MALLE_SERVICE_URL)
+            _mission_executor = executor
+            print("[bridge_node] MissionExecutor 로드 완료")
+        except Exception as e:
+            print(f"[bridge_node] MissionExecutor 로드 실패: {e} — 폴백 모드")
+
+        # MultiThreadedExecutor로 두 노드 동시 spin
+        from rclpy.executors import MultiThreadedExecutor
+        ros_executor = MultiThreadedExecutor()
+        ros_executor.add_node(bridge)
+        if _mission_executor:
+            ros_executor.add_node(_mission_executor)
+
+        try:
+            ros_executor.spin()
         except KeyboardInterrupt:
             pass
         finally:
-            node._http_client.close()
-            node.destroy_node()
+            bridge._http_client.close()
+            ros_executor.shutdown()
             rclpy.shutdown()
     else:
         print("[bridge_node] HTTP-only mode. Ctrl+C to exit.")
