@@ -78,7 +78,7 @@ async def create_session_with_assignment(
             SessionType.TASK: RobotMode.GUIDE,
             SessionType.TIME: RobotMode.GUIDE,
         }
-        robot.current_mode = mode_map.get(session_type, RobotMode.GUIDE)
+        # robot.current_mode = mode_map.get(session_type, RobotMode.GUIDE)
 
         await db.flush()
         await db.refresh(session)

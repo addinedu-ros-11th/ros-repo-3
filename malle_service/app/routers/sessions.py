@@ -97,7 +97,7 @@ async def verify_pin(
             detail=f"Session not in MATCHING state (current: {session.status})",
         )
 
-    if session.pin_expires_at and datetime.now(timezone.utc) > session.pin_expires_at:
+    if session.pin_expires_at and datetime.utcnow() > session.pin_expires_at.replace(tzinfo=None):
         raise HTTPException(status_code=400, detail="PIN expired")
 
     if session.match_pin != req.pin:
