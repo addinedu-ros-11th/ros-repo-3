@@ -3,22 +3,17 @@
 핵심 로직:
 1. IDLE + 온라인 + 배터리 충분한 로봇 필터링
 2. 목표 좌표까지 유클리드 거리 기준 가장 가까운 로봇 선택
-3. next_available_time이 지난 로봇도 후보에 포함
 """
 
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
 import math
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.robot import Robot, RobotStateCurrent, RobotMode
-
+from app.models.robot import Robot, RobotMode
 from app.config import settings
 
-battery_threshold = settings.BATTERY_THRESHOLD
 
 async def find_nearest_available_robot(
     db: AsyncSession,
@@ -39,7 +34,7 @@ async def find_nearest_available_robot(
         .options(selectinload(Robot.state))
         .where(
             Robot.is_online == True,
-            Robot.battery_pct >= BATTERY_THRESHOLD,
+            Robot.battery_pct >= settings.BATTERY_THRESHOLD,
             Robot.current_mode == RobotMode.IDLE,
         )
     )
@@ -53,7 +48,6 @@ async def find_nearest_available_robot(
     if not candidates:
         return None
 
-    # 거리 기반 정렬
     def distance(robot: Robot) -> float:
         if not robot.state:
             return float("inf")
@@ -70,7 +64,7 @@ async def get_available_robot_count(db: AsyncSession) -> int:
     result = await db.execute(
         select(Robot).where(
             Robot.is_online == True,
-            Robot.battery_pct >= BATTERY_THRESHOLD,
+            Robot.battery_pct >= settings.BATTERY_THRESHOLD,
             Robot.current_mode == RobotMode.IDLE,
         )
     )
@@ -89,7 +83,7 @@ async def get_dispatch_status(db: AsyncSession) -> dict:
     for r in robots:
         is_available = (
             r.is_online
-            and r.battery_pct >= BATTERY_THRESHOLD
+            and r.battery_pct >= settings.BATTERY_THRESHOLD
             and r.current_mode == RobotMode.IDLE
         )
         if is_available:
