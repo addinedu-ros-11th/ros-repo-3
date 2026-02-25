@@ -16,7 +16,9 @@ from sqlalchemy.orm import selectinload
 
 from app.models.robot import Robot, RobotStateCurrent, RobotMode
 
-from app.config import BATTERY_THRESHOLD  # noqa: E402
+from app.config import settings
+
+battery_threshold = settings.BATTERY_THRESHOLD
 
 async def find_nearest_available_robot(
     db: AsyncSession,

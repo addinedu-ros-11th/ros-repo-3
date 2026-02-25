@@ -10,8 +10,10 @@ from app.models.guide import GuideQueueItem, GuideItemStatus
 from app.models.poi import Poi
 from app.models.robot import RobotStateCurrent
 
-from app.config import AVG_ROBOT_SPEED_M_PER_SEC, POI_STOP_TIME_SEC
+from app.config import settings
 
+AVG_ROBOT_SPEED_M_PER_SEC = settings.AVG_ROBOT_SPEED_M_PER_SEC
+POI_STOP_TIME_SEC = settings.POI_STOP_TIME_SEC
 
 async def estimate_session_completion(
     db: AsyncSession,
