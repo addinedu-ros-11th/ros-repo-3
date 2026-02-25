@@ -101,8 +101,6 @@ install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 install(PROGRAMS
-  ${CMAKE_CURRENT_BINARY_DIR}/test_publisher
-  ${CMAKE_CURRENT_BINARY_DIR}/test_subscriber
   ${CMAKE_CURRENT_BINARY_DIR}/mission_executor
   ${CMAKE_CURRENT_BINARY_DIR}/mission_follow
   ${CMAKE_CURRENT_BINARY_DIR}/bridge_node
