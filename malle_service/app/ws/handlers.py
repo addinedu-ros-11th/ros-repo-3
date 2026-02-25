@@ -1,4 +1,6 @@
 """
+malle_service/app/ws/handlers.py
+
 WebSocket inbound message handlers.
 클라이언트(mobile/robot/dashboard)가 WS로 보내는 메시지 처리.
 
@@ -6,12 +8,12 @@ WebSocket inbound message handlers.
 일부 실시간 명령(teleop, PING)은 WS로 처리.
 """
 
-import json
 import logging
 
 import httpx
 
 from app.config import AI_SERVICE_URL
+from app.utils.bridge import send_to_bridge
 from app.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -19,26 +21,22 @@ logger = logging.getLogger(__name__)
 
 async def handle_dashboard_teleop(payload: dict):
     """
-    대시보드에서 WS로 보내는 텔레옵 명령 처리.
-    REST API POST /robots/{id}/teleop/cmd 로 내부 포워딩.
+    대시보드 WS TELEOP_CMD 처리.
+    기존: self(:8000) 재호출 → 수정: bridge_node 직접 호출
     """
     robot_id = payload.get("robot_id")
-    linear_x = payload.get("linear_x", 0.0)
-    angular_z = payload.get("angular_z", 0.0)
+    linear_x  = float(payload.get("linear_x", 0.0))
+    angular_z = float(payload.get("angular_z", 0.0))
 
-    if not robot_id:
+    if robot_id is None:
+        logger.debug("[teleop] TELEOP_CMD missing robot_id — ignored")
         return
 
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            await client.post(
-                f"http://localhost:8000/api/v1/robots/{robot_id}/teleop/cmd",
-                json={"linear_x": linear_x, "angular_z": angular_z},
-            )
-    except httpx.ConnectError:
-        logger.debug("Teleop forward failed: service unreachable")
-    except Exception as e:
-        logger.warning(f"Teleop forward error: {e}")
+    await send_to_bridge("teleop/cmd", {
+        "robot_id": robot_id,
+        "linear_x": linear_x,
+        "angular_z": angular_z,
+    })
 
 
 async def handle_voice_command(session_id: int, text: str, client_type: str = "mobile"):
