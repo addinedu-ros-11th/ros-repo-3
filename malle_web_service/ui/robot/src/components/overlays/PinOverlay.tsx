@@ -1,43 +1,70 @@
 import { useState, useCallback } from 'react';
 import { useRobotStore } from '@/stores/robotStore';
+import { sessionApi } from '@/api/sessions';
 
 export function PinOverlay() {
-  const { showPinOverlay, setShowPinOverlay, startSession } = useRobotStore();
+  const { showPinOverlay, currentSessionId, startSession } = useRobotStore();
   const [pin, setPin] = useState('');
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleKeyPress = useCallback((digit: string) => {
+    if (loading) return;
     if (pin.length < 4) {
       setPin(prev => prev + digit);
-      setError(false);
+      setError(null);
     }
-  }, [pin]);
+  }, [pin, loading]);
 
   const handleBackspace = useCallback(() => {
+    if (loading) return;
     setPin(prev => prev.slice(0, -1));
-    setError(false);
-  }, []);
+    setError(null);
+  }, [loading]);
 
-  const handleConfirm = useCallback(() => {
-    if (pin.length === 4) {
-      // Demo: Accept "1234" or any 4-digit PIN
-      if (pin === '1234' || pin.length === 4) {
-        setSuccess(true);
-        setTimeout(() => {
-          startSession('TIME', 5400, 'Customer'); // 1.5 hours = 5400 seconds
-          setPin('');
-          setSuccess(false);
-        }, 1500);
-      } else {
-        setError(true);
-        setTimeout(() => {
-          setPin('');
-          setError(false);
-        }, 1000);
-      }
+  const handleConfirm = useCallback(async () => {
+    if (pin.length !== 4 || loading) return;
+
+    setLoading(true);
+    setError(null);
+
+    // 데모 모드: currentSessionId 없으면 PIN 검증 없이 바로 세션 활성화
+    if (!currentSessionId) {
+      setSuccess(true);
+      setTimeout(() => {
+        startSession('TIME', 7200, 'Demo Customer');
+        setPin('');
+        setSuccess(false);
+      }, 1000);
+      setLoading(false);
+      return;
     }
-  }, [pin, startSession]);
+
+    try {
+      // 실제 세션: 서버 PIN 검증 → 성공 시 WS SESSION_ACTIVE 이벤트 → startSession() 자동 호출
+      await sessionApi.verifyPin(currentSessionId, pin);
+      setSuccess(true);
+      // WS가 늦게 오는 경우 대비 1.5초 fallback
+      setTimeout(() => {
+        const state = useRobotStore.getState();
+        if (state.sessionState !== 'ACTIVE') {
+          startSession('TIME', 7200, 'Customer');
+        }
+        setPin('');
+        setSuccess(false);
+      }, 1500);
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail ?? 'Invalid PIN';
+      setError(msg);
+      setTimeout(() => {
+        setPin('');
+        setError(null);
+      }, 1200);
+    } finally {
+      setLoading(false);
+    }
+  }, [pin, currentSessionId, loading, startSession]);
 
   if (!showPinOverlay) return null;
 
@@ -73,7 +100,7 @@ export function PinOverlay() {
 
             {error && (
               <p className="text-destructive text-sm font-medium mb-4">
-                PIN Incorrect. Try again.
+                {error}
               </p>
             )}
 
@@ -83,21 +110,24 @@ export function PinOverlay() {
                 <button
                   key={digit}
                   onClick={() => handleKeyPress(String(digit))}
-                  className="keypad-btn"
+                  disabled={loading}
+                  className="keypad-btn disabled:opacity-50"
                 >
                   {digit}
                 </button>
               ))}
-              <div /> {/* Empty space */}
+              <div />
               <button
                 onClick={() => handleKeyPress('0')}
-                className="keypad-btn"
+                disabled={loading}
+                className="keypad-btn disabled:opacity-50"
               >
                 0
               </button>
               <button
                 onClick={handleBackspace}
-                className="keypad-btn"
+                disabled={loading}
+                className="keypad-btn disabled:opacity-50"
               >
                 <span className="material-icons-round">backspace</span>
               </button>
@@ -106,16 +136,12 @@ export function PinOverlay() {
             {/* Confirm Button */}
             <button
               onClick={handleConfirm}
-              disabled={pin.length !== 4}
-              className="btn-primary py-4 px-12 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={pin.length !== 4 || loading}
+              className="btn-primary py-4 px-12 text-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 mx-auto"
             >
+              {loading && <span className="material-icons-round text-sm animate-spin">refresh</span>}
               Confirm
             </button>
-
-            {/* Demo hint */}
-            <p className="text-xs text-muted-foreground mt-4">
-              Demo: Enter any 4 digits to proceed
-            </p>
           </>
         )}
       </div>
