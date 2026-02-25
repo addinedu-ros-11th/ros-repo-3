@@ -19,6 +19,7 @@ from app.schemas.robot import (
 )
 from app.ws.manager import manager
 from app.ws.events import WsEvent
+from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count
 
 router = APIRouter()
 
@@ -31,6 +32,19 @@ async def list_robots(db: AsyncSession = Depends(get_db)):
     )
     robots = result.scalars().all()
     return RobotListResponse(robots=robots)
+
+
+@router.get("/robots/dispatch/status")
+async def dispatch_status(db: AsyncSession = Depends(get_db)):
+    """배정 현황: 전체 로봇 목록 + 가용 여부."""
+    return await get_dispatch_status(db)
+
+
+@router.get("/robots/dispatch/count")
+async def dispatch_count(db: AsyncSession = Depends(get_db)):
+    """현재 배정 가능한 로봇 수."""
+    count = await get_available_robot_count(db)
+    return {"available_count": count}
 
 
 @router.get("/robots/{robot_id}", response_model=RobotResponse)
