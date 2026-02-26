@@ -48,7 +48,5 @@
 
   <!-- ===== battery_monitor ===== -->
   <node pkg="malle_controller" exec="battery_monitor" name="battery_monitor"
-        output="screen">
-    <param name="battery_topic" value="$(var robot_ns)/battery"/>
-  </node>
+        output="screen"/>
 </launch>
