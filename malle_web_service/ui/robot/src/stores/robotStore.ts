@@ -35,43 +35,43 @@ interface RobotStore {
   session: Session | null;
   activeMode: ActiveMode;
   sessionTime: number;
-  
+
   // Guide State
   guide: GuideState;
-  
+
   // Follow State
   follow: FollowState;
-  
+
   // Pickup State
   pickup: PickupState;
-  
+
   // Lockbox State
   lockboxSlots: LockboxSlot[];
   lockboxLogs: LockboxLog[];
-  
+
   // Notifications
   notifications: Notification[];
   notificationPanelOpen: boolean;
-  
+
   // PIN Overlay
   showPinOverlay: boolean;
-  
+
   // Actions - Session
   setSessionState: (state: SessionState) => void;
   startSession: (type: 'TASK' | 'TIME', remainingTime: number, customerName: string) => void;
   endSession: () => void;
   incrementSessionTime: () => void;
   decrementRemainingTime: () => void;
-  
+
   // Actions - Robot
   setRobotStatus: (status: Robot['status']) => void;
   setBattery: (battery: number) => void;
-  
+
   // Actions - Mode
   setActiveMode: (mode: ActiveMode) => void;
-  
+
   // Actions - Guide
-  addToGuideQueue: (item: Omit<GuideQueueItem, 'id' | 'status' | 'selected'>) => void;
+  addToGuideQueue: (item: Omit<GuideQueueItem, 'id' | 'serverItemId' | 'status' | 'selected'>) => void;
   removeFromGuideQueue: (id: string) => void;
   clearGuideQueue: () => void;
   toggleGuideItemSelection: (id: string) => void;
@@ -80,30 +80,30 @@ interface RobotStore {
   stopGuide: () => void;
   advanceGuide: () => void;
   setGuideItemStatus: (id: string, status: GuideQueueItem['status']) => void;
-  
+
   // Actions - Follow
   startFollow: (tagNumber: FollowTag) => void;
   stopFollow: () => void;
   setFollowStatus: (status: FollowStatus) => void;
   changeFollowTag: (tagNumber: FollowTag) => void;
-  
+
   // Actions - Pickup
   createPickupOrder: (order: Omit<PickupOrder, 'status'>) => void;
   setPickupStatus: (status: PickupOrder['status']) => void;
   completePickup: () => void;
   setShowLoadingOverlay: (show: boolean) => void;
-  
+
   // Actions - Lockbox
   setSlotStatus: (slotNumber: number, status: LockboxSlot['status'], orderInfo?: LockboxSlot['orderInfo']) => void;
   addLockboxLog: (log: Omit<LockboxLog, 'id'>) => void;
   openSlot: (slotNumber: number) => void;
-  
+
   // Actions - Notifications
   addNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   toggleNotificationPanel: () => void;
-  
+
   // Actions - PIN
   setShowPinOverlay: (show: boolean) => void;
   verifyPin: (pin: string) => boolean;
@@ -159,11 +159,11 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   session: null,
   activeMode: null,
   sessionTime: 0,
-  
+
   guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
   follow: { active: false, tagNumber: null, status: 'STOPPED' },
   pickup: { currentOrder: null, showLoadingOverlay: false },
-  
+
   lockboxSlots: initialLockboxSlots,
   lockboxLogs: initialLockboxLogs,
   notifications: initialNotifications,
@@ -171,20 +171,20 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   showPinOverlay: false,
   pendingLockboxSlot: null,
   pendingPickupStore: null,
-  
-  // Session Actions
+
+  // ── Session ──────────────────────────────────────────────────────────────
+
   setSessionState: (state) => set({ sessionState: state }),
-  
+
   startSession: (type, remainingTime, customerName) => set({
     sessionState: 'ACTIVE',
     session: { type, remainingTime, customerId: 'customer-1', customerName },
     sessionTime: 0,
     showPinOverlay: false,
   }),
-  
+
   endSession: () => {
     const { currentSessionId } = get();
-    // ★ API
     if (currentSessionId) sessionApi.end(currentSessionId).catch(() => {});
     set({
       sessionState: 'INACTIVE',
@@ -197,67 +197,102 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       currentSessionId: null,
     });
   },
-  
+
   incrementSessionTime: () => set((state) => ({ sessionTime: state.sessionTime + 1 })),
-  
+
   decrementRemainingTime: () => set((state) => ({
-    session: state.session ? { ...state.session, remainingTime: Math.max(0, state.session.remainingTime - 1) } : null,
+    session: state.session
+      ? { ...state.session, remainingTime: Math.max(0, state.session.remainingTime - 1) }
+      : null,
   })),
-  
-  // Robot Actions
+
+  // ── Robot ────────────────────────────────────────────────────────────────
+
   setRobotStatus: (status) => set((state) => ({ robot: { ...state.robot, status } })),
   setBattery: (battery) => set((state) => ({ robot: { ...state.robot, battery } })),
-  
-  // Mode Actions
+
+  // ── Mode ─────────────────────────────────────────────────────────────────
+
   setActiveMode: (mode) => set({ activeMode: mode }),
-  
-  // Guide Actions
+
+  // ── Guide ────────────────────────────────────────────────────────────────
+
   addToGuideQueue: (item) => {
+    const localId = `guide-${Date.now()}`;
     set((state) => ({
       guide: {
         ...state.guide,
-        queue: [...state.guide.queue, { ...item, id: crypto.randomUUID(), status: 'PENDING', selected: true }],
+        queue: [...state.guide.queue, {
+          ...item,
+          id: localId,
+          serverItemId: null,  // API 응답 후 채움
+          status: 'PENDING',
+          selected: true,
+        }],
       },
     }));
-    // ★ API: poiName으로 poi_id를 찾아야 하지만, 서버에 이름 기반 추가 불가 → session이 있으면 시도
-    // guide queue는 주로 WS GUIDE_QUEUE_UPDATED로 서버→프론트 동기화
+    // poi_id는 poiId 필드에서 숫자로 변환
+    const { currentSessionId } = get();
+    if (currentSessionId && item.poiId) {
+      guideApi.addToQueue(currentSessionId, Number(item.poiId))
+        .then((res) => {
+          set((state) => ({
+            guide: {
+              ...state.guide,
+              queue: state.guide.queue.map((q) =>
+                q.id === localId ? { ...q, serverItemId: res.id } : q
+              ),
+            },
+          }));
+        })
+        .catch(() => {});
+    }
   },
-  
-  removeFromGuideQueue: (id) => set((state) => ({
-    guide: { ...state.guide, queue: state.guide.queue.filter((item) => item.id !== id) },
-  })),
-  
+
+  removeFromGuideQueue: (id) => {
+    // 삭제 전 serverItemId 조회
+    const item = get().guide.queue.find((q) => q.id === id);
+    set((state) => ({
+      guide: { ...state.guide, queue: state.guide.queue.filter((q) => q.id !== id) },
+    }));
+    const { currentSessionId } = get();
+    if (currentSessionId && item?.serverItemId) {
+      guideApi.removeFromQueue(currentSessionId, item.serverItemId).catch(() => {});
+    }
+  },
+
   clearGuideQueue: () => {
     set((state) => ({ guide: { ...state.guide, queue: [] } }));
     const { currentSessionId } = get();
     if (currentSessionId) guideApi.clear(currentSessionId).catch(() => {});
   },
-  
+
   toggleGuideItemSelection: (id) => set((state) => ({
     guide: {
       ...state.guide,
-      queue: state.guide.queue.map((item) => item.id === id ? { ...item, selected: !item.selected } : item),
+      queue: state.guide.queue.map((item) =>
+        item.id === id ? { ...item, selected: !item.selected } : item
+      ),
     },
   })),
-  
+
   selectAllGuideItems: (selected) => set((state) => ({
     guide: { ...state.guide, queue: state.guide.queue.map((item) => ({ ...item, selected })) },
   })),
-  
+
   startGuide: () => {
     const state = get();
     const selectedItems = state.guide.queue.filter((item) => item.selected);
     if (selectedItems.length === 0) return;
     set({ activeMode: 'GUIDE', guide: { ...state.guide, isExecuting: true, currentDestinationIndex: 0 } });
-    // ★ API
     if (state.currentSessionId) guideApi.execute(state.currentSessionId).catch(() => {});
   },
-  
+
   stopGuide: () => set((state) => ({
     activeMode: null,
     guide: { ...state.guide, isExecuting: false, currentDestinationIndex: 0 },
   })),
-  
+
   advanceGuide: () => set((state) => {
     const selectedItems = state.guide.queue.filter((item) => item.selected);
     const nextIndex = state.guide.currentDestinationIndex + 1;
@@ -266,7 +301,7 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     }
     return { guide: { ...state.guide, currentDestinationIndex: nextIndex } };
   }),
-  
+
   setGuideItemStatus: (id, status) => set((state) => ({
     guide: {
       ...state.guide,
@@ -274,12 +309,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     },
   })),
 
-  // ★ WS-driven: 서버에서 큐 전체 교체
+  // ★ WS-driven: 서버에서 큐 전체 교체 (serverItemId 포함)
   _setGuideQueueFromServer: (queue) => set((state) => ({
     guide: { ...state.guide, queue },
   })),
-  
-  // Follow Actions
+
+  // ── Follow ───────────────────────────────────────────────────────────────
+
   startFollow: (tagNumber) => {
     set((state) => ({
       activeMode: 'FOLLOW',
@@ -287,25 +323,28 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       robot: { ...state.robot, status: 'MOVING' },
     }));
     const { currentSessionId } = get();
-    if (currentSessionId && tagNumber) sessionApi.setFollowTag(currentSessionId, tagNumber).catch(() => {});
+    if (currentSessionId && tagNumber) {
+      sessionApi.setFollowTag(currentSessionId, tagNumber).catch(() => {});
+    }
   },
-  
+
   stopFollow: () => set((state) => ({
     activeMode: null,
     follow: { active: false, tagNumber: null, status: 'STOPPED' },
     robot: { ...state.robot, status: 'IDLE' },
   })),
-  
+
   setFollowStatus: (status) => set((state) => ({ follow: { ...state.follow, status } })),
   changeFollowTag: (tagNumber) => set((state) => ({ follow: { ...state.follow, tagNumber } })),
-  
-  // Pickup Actions
+
+  // ── Pickup ───────────────────────────────────────────────────────────────
+
   createPickupOrder: (order) => {
     const state = get();
     const emptySlotIndex = state.lockboxSlots.findIndex((slot) => slot.status === 'EMPTY');
     if (emptySlotIndex === -1) return;
     const slotNumber = state.lockboxSlots[emptySlotIndex].number;
-    
+
     set((state) => ({
       activeMode: 'PICKUP',
       robot: { ...state.robot, status: 'MOVING' },
@@ -316,22 +355,22 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
           : slot
       ),
     }));
-    // ★ API
+
     if (state.currentSessionId) {
       pickupApi.create(state.currentSessionId, {
-        pickup_poi_id: 1, // 서버에서 store→poi 매핑 필요
+        pickup_poi_id: 1, // TODO: store → poi_id 매핑
         created_channel: 'ROBOT',
         items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
       }).catch(() => {});
     }
   },
-  
+
   setPickupStatus: (status) => set((state) => ({
     pickup: state.pickup.currentOrder
       ? { ...state.pickup, currentOrder: { ...state.pickup.currentOrder, status } }
       : state.pickup,
   })),
-  
+
   completePickup: () => {
     const state = get();
     if (!state.pickup.currentOrder) return;
@@ -347,10 +386,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       ),
     }));
   },
-  
-  setShowLoadingOverlay: (show) => set((state) => ({ pickup: { ...state.pickup, showLoadingOverlay: show } })),
-  
-  // Lockbox Actions
+
+  setShowLoadingOverlay: (show) => set((state) => ({
+    pickup: { ...state.pickup, showLoadingOverlay: show },
+  })),
+
+  // ── Lockbox ──────────────────────────────────────────────────────────────
+
   setSlotStatus: (slotNumber, status, orderInfo) => set((state) => ({
     lockboxSlots: state.lockboxSlots.map((slot) =>
       slot.number === slotNumber
@@ -358,18 +400,20 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
             ...slot,
             status,
             orderInfo: orderInfo ?? (status === 'EMPTY' ? undefined : slot.orderInfo),
-            occupiedSince: status === 'FULL' ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined,
+            occupiedSince: status === 'FULL'
+              ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : undefined,
             isPickupOrder: status === 'RESERVED' ? true : status === 'EMPTY' ? false : (orderInfo ? true : false),
             pickedUp: false,
           }
         : slot
     ),
   })),
-  
+
   addLockboxLog: (log) => set((state) => ({
     lockboxLogs: [{ ...log, id: crypto.randomUUID() }, ...state.lockboxLogs].slice(0, 20),
   })),
-  
+
   openSlot: (slotNumber) => {
     const state = get();
     state.addLockboxLog({
@@ -379,35 +423,37 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       result: 'SUCCESS',
       description: `Slot ${slotNumber} opened`,
     });
-    // ★ API
     if (state.currentRobotId) lockboxApi.openSlot(state.currentRobotId, slotNumber).catch(() => {});
   },
-  
-  // Notification Actions
+
+  // ── Notifications ────────────────────────────────────────────────────────
+
   addNotification: (notification) => set((state) => ({
     notifications: [
       { ...notification, id: crypto.randomUUID(), timestamp: new Date(), read: false },
       ...state.notifications,
     ].slice(0, 50),
   })),
-  
+
   markNotificationRead: (id) => set((state) => ({
     notifications: state.notifications.map((n) => n.id === id ? { ...n, read: true } : n),
   })),
-  
+
   markAllNotificationsRead: () => set((state) => ({
     notifications: state.notifications.map((n) => ({ ...n, read: true })),
   })),
-  
-  toggleNotificationPanel: () => set((state) => ({ notificationPanelOpen: !state.notificationPanelOpen })),
-  
-  // PIN Actions
+
+  toggleNotificationPanel: () => set((state) => ({
+    notificationPanelOpen: !state.notificationPanelOpen,
+  })),
+
+  // ── PIN ──────────────────────────────────────────────────────────────────
+
   setShowPinOverlay: (show) => set({ showPinOverlay: show }),
-  
+
   verifyPin: (pin) => {
     const { currentSessionId } = get();
     if (pin.length === 4) {
-      // ★ API: PIN 검증
       if (currentSessionId) {
         sessionApi.verifyPin(currentSessionId, pin).catch(() => {});
       }
@@ -417,13 +463,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     return false;
   },
 
-  // Voice Intent Actions
+  // ── Voice Intent ─────────────────────────────────────────────────────────
+
   setPendingLockboxSlot: (slot) => set({ pendingLockboxSlot: slot }),
   setPendingPickupStore: (store) => set({ pendingPickupStore: store }),
 
   executeVoiceIntent: (intent) => {
     const state = get();
-
     switch (intent.type) {
       case 'GUIDE_TO': {
         const store = resolveStoreName(intent.destination);
@@ -434,13 +480,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
           return { success: false, message: `❌ ${store.name} is currently closed.` };
         }
         state.addToGuideQueue({
+          poiId: store.id,
           poiName: store.name,
           floor: store.location,
           estimatedTime: Math.floor(Math.random() * 5) + 2,
         });
         return { success: true, message: `✅ Added ${store.name} to your Guide queue.`, navigateTo: '/mode/guide' };
       }
-
       case 'OPEN_LOCKBOX': {
         const slot = state.lockboxSlots.find((s) => s.number === intent.slotId);
         if (!slot) {
@@ -452,7 +498,6 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
         set({ pendingLockboxSlot: intent.slotId });
         return { success: true, message: `✅ Opening lockbox slot ${intent.slotId}. Please verify with token.`, navigateTo: '/lockbox' };
       }
-
       case 'START_FOLLOW': {
         const validTags = [11, 12, 13];
         if (!validTags.includes(intent.tagId)) {
@@ -461,7 +506,6 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
         state.startFollow(intent.tagId as 11 | 12 | 13);
         return { success: true, message: `✅ Follow mode activated with Tag #${intent.tagId}.`, navigateTo: '/mode/follow' };
       }
-
       case 'CREATE_PICKUP': {
         const store = resolveStoreName(intent.storeName);
         if (!store) {
@@ -477,16 +521,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
         set({ pendingPickupStore: store.id });
         return { success: true, message: `✅ Starting pickup order from ${store.name}.`, navigateTo: '/mode/pickup' };
       }
-
       case 'EMERGENCY_STOP': {
         state.setRobotStatus('STOPPED');
         return { success: true, message: `🛑 Emergency stop activated. Robot has been stopped.` };
       }
-
       case 'RETURN_TO_STATION': {
         return { success: true, message: `🏠 Returning robot to the nearest station. Please confirm.` };
       }
-
       case 'SHOW_STATUS': {
         const r = state.robot;
         const mode = state.activeMode || 'None';
@@ -495,7 +536,6 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
           message: `🤖 ${r.name} — Battery: ${r.battery}%, Network: ${r.networkStrength}, Status: ${r.status}, Mode: ${mode}`,
         };
       }
-
       case 'UNKNOWN':
         return { success: false, message: `I understood: "${intent.rawText}". I couldn't match this to a known command.` };
     }

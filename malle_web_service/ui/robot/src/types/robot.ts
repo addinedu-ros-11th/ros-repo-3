@@ -24,7 +24,11 @@ export interface Session {
 export type GuideQueueStatus = 'PENDING' | 'IN_PROGRESS' | 'ARRIVED' | 'DONE';
 
 export interface GuideQueueItem {
+  serverItemId: number | null;  // 서버 item id
+  poiId: string;
   id: string;
+  serverItemId: number | null;  // 서버 guide_queue_item.id (DELETE/PATCH용)
+  poiId: string;
   poiName: string;
   floor: string;
   estimatedTime: number; // minutes
