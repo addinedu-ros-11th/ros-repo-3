@@ -10,7 +10,7 @@ export type SessionType = 'TASK' | 'TIME';
 export type GuideStatus = 'PENDING' | 'IN_PROGRESS' | 'ARRIVED' | 'DONE';
 export type FollowStatus = 'FOLLOWING' | 'LOST' | 'STOPPED' | 'RECONNECTING';
 export type PickupStatus = 'IDLE' | 'MOVING' | 'LOADING' | 'LOADED' | 'MEETUP_SET' | 'RETURNING' | 'DONE';
-export type LockboxStatus = 'FULL' | 'EMPTY' | 'RESERVED' | 'PICKED_UP';
+export type LockboxStatus = 'FULL' | 'EMPTY' | 'RESERVED' | 'PICKEDUP';
 export type TaskMissionType = 'GUIDE' | 'PICKUP';
 
 export interface Robot {
@@ -64,7 +64,7 @@ export interface PickupOrder {
 }
 
 export interface LockboxSlot {
-  slotNumber: number;
+  number: number;
   status: LockboxStatus;
   occupiedSince?: string;
   orderInfo?: {
@@ -254,11 +254,11 @@ function mapPoi(p: PoiRes): POI {
 
 /* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
 const initialLockboxSlots: LockboxSlot[] = [
-  { slotNumber: 1, status: 'EMPTY' },
-  { slotNumber: 2, status: 'EMPTY' },
-  { slotNumber: 3, status: 'EMPTY' },
-  { slotNumber: 4, status: 'EMPTY' },
-  { slotNumber: 5, status: 'EMPTY' },
+  { number: 1, status: 'EMPTY' },
+  { number: 2, status: 'EMPTY' },
+  { number: 3, status: 'EMPTY' },
+  { number: 4, status: 'EMPTY' },
+  { number: 5, status: 'EMPTY' },
 ];
 
 /* localId 충돌 방지용 카운터 (Date.now()는 동기 루프에서 중복됨) */
@@ -374,8 +374,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         const store = state.stores.find(s => s.id === state.taskMission!.storeId);
         const emptySlot = state.lockboxSlots.find(s => s.status === 'EMPTY');
         const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
-        updates.pickupOrder = { orderId, storeId: state.taskMission.storeId, storeName: store?.name || state.taskMission.storeName || 'Unknown Store', items: state.taskMission.items, status: 'MOVING', meetupLocation: null, slotId: emptySlot?.slotNumber || null };
-        if (emptySlot) updates.lockboxSlots = state.lockboxSlots.map(slot => slot.slotNumber === emptySlot.slotNumber ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot);
+        updates.pickupOrder = { orderId, storeId: state.taskMission.storeId, storeName: store?.name || state.taskMission.storeName || 'Unknown Store', items: state.taskMission.items, status: 'MOVING', meetupLocation: null, slotId: emptySlot?.number || null };
+        if (emptySlot) updates.lockboxSlots = state.lockboxSlots.map(slot => slot.number === emptySlot.number ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot);
         updates.robot = state.robot ? { ...state.robot, mode: 'PICKUP' } : null;
       }
     }
@@ -504,8 +504,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!emptySlot) return;
     const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
     set({
-      pickupOrder: { orderId, storeId, storeName: store?.name || 'Unknown Store', items, status: 'IDLE', meetupLocation: null, slotId: emptySlot.slotNumber },
-      lockboxSlots: state.lockboxSlots.map(slot => slot.slotNumber === emptySlot.slotNumber ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot),
+      pickupOrder: { orderId, storeId, storeName: store?.name || 'Unknown Store', items, status: 'IDLE', meetupLocation: null, slotId: emptySlot.number },
+      lockboxSlots: state.lockboxSlots.map(slot => slot.number === emptySlot.number ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot),
     });
     if (state.currentSessionId) pickupApi.create(state.currentSessionId, { pickup_poi_id: Number(storeId), created_channel: 'APP', items: items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })) }).catch(() => {});
   },
@@ -515,7 +515,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       robot: s.robot ? { ...s.robot, mode: status === 'DONE' ? null : status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
     };
     if (status === 'RETURNING' && s.pickupOrder?.slotId)
-      u.lockboxSlots = s.lockboxSlots.map(slot => slot.slotNumber === s.pickupOrder!.slotId ? { ...slot, status: 'PICKED_UP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : slot);
+      u.lockboxSlots = s.lockboxSlots.map(slot => slot.number === s.pickupOrder!.slotId ? { ...slot, status: 'PICKEDUP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : slot);
     return u;
   }),
   setMeetupLocation: (location) => set((s) => ({ pickupOrder: s.pickupOrder ? { ...s.pickupOrder, meetupLocation: location } : null })),
@@ -530,14 +530,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   confirmSlotFull: (slotNumber) => {
     const now = new Date();
     set((s) => ({
-      lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'FULL' as LockboxStatus, occupiedSince: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : sl),
+      lockboxSlots: s.lockboxSlots.map((sl) => sl.number === slotNumber ? { ...sl, status: 'FULL' as LockboxStatus, occupiedSince: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : sl),
       lockboxLogs: [{ id: `log-${now.getTime()}`, timestamp: now, slotNumber, action: 'SECURED' as const, result: 'SUCCESS' as const, description: 'Items securely stored' }, ...s.lockboxLogs].slice(0, 10),
     }));
     const { currentRobotId } = get();
     if (currentRobotId) lockboxApi.updateSlotStatus(currentRobotId, slotNumber, 'FULL').catch(() => {});
   },
   confirmSlotEmpty: (slotNumber) => {
-    set((s) => ({ lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'EMPTY' as LockboxStatus, occupiedSince: undefined, orderInfo: undefined } : sl) }));
+    set((s) => ({ lockboxSlots: s.lockboxSlots.map((sl) => sl.number === slotNumber ? { ...sl, status: 'EMPTY' as LockboxStatus, occupiedSince: undefined, orderInfo: undefined } : sl) }));
     const { currentRobotId } = get();
     if (currentRobotId) lockboxApi.updateSlotStatus(currentRobotId, slotNumber, 'EMPTY').catch(() => {});
   },
@@ -550,10 +550,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   _setLockboxSlotsFromServer: (serverSlots) => set((s) => ({
     lockboxSlots: serverSlots.map((sl) => {
-      const existing = s.lockboxSlots.find((e) => e.slotNumber === sl.slot_no);
+      const existing = s.lockboxSlots.find((e) => e.number === sl.slot_no);
       return {
-        slotNumber: sl.slot_no,
-        status: (sl.status === 'PICKEDUP' ? 'PICKED_UP' : sl.status) as LockboxStatus,
+        number: sl.slot_no,
+        status: sl.status as LockboxStatus,
         occupiedSince: existing?.occupiedSince,
         orderInfo: existing?.orderInfo,
       };

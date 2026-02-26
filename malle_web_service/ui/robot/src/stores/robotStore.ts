@@ -186,21 +186,28 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     showPinOverlay: false,
   }),
 
-  endSession: () => {
-    const { currentSessionId } = get();
-    if (currentSessionId) sessionApi.end(currentSessionId).catch(() => {});
-    set({
-      sessionState: 'INACTIVE',
-      session: null,
-      activeMode: null,
-      sessionTime: 0,
-      guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
-      follow: { active: false, tagNumber: null, status: 'STOPPED' },
-      pickup: { currentOrder: null, showLoadingOverlay: false },
-      currentSessionId: null,
-      lockboxSlots: initialLockboxSlots,
-      lockboxLogs: [],
-    });
+  endSession: async () => {
+      const { currentSessionId } = get();
+      try {
+        if (currentSessionId) {
+          await sessionApi.end(currentSessionId);
+          // ★ resetAll 제거 — 서버 end_session이 락박스 초기화 + LOCKBOX_UPDATED 브로드캐스트함
+        }
+      } catch (e) {
+        console.error('Session end failed', e);
+      }
+      set({
+        sessionState: 'INACTIVE',
+        session: null,
+        activeMode: null,
+        sessionTime: 0,
+        guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
+        follow: { active: false, tagNumber: null, status: 'STOPPED' },
+        pickup: { currentOrder: null, showLoadingOverlay: false },
+        currentSessionId: null,
+        lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
+        lockboxLogs: [],
+      });
   },
 
   incrementSessionTime: () => set((state) => ({ sessionTime: state.sessionTime + 1 })),
@@ -457,9 +464,13 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     const state = get();
     const robotId = state.currentRobotId ?? Number(state.robot.id);
     if (!robotId) return;
-    lockboxApi.getSlots(robotId)
-      .then((slots) => useRobotStore.getState()._setLockboxSlotsFromServer(slots))
-      .catch(() => {});
+
+    // 🔥 1. 먼저 완전 초기화
+    set({
+      lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
+      lockboxLogs: [],
+    });
+
   },
 
   _setLockboxSlotsFromServer: (serverSlots) => set((state) => ({

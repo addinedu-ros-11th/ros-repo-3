@@ -34,8 +34,17 @@ useRobotStore.setState((s) => ({
 function RobotInit() {
   const robotId = useRobotStore((s) => s.robot.id);
 
+  const initLockboxSlots = useRobotStore((s) => s.initLockboxSlots);
+
   // 로봇은 항상 WS 연결 (robotId는 고정)
   useWsHandler(robotId);
+
+    // 세션 시작 시 lockbox 초기화
+  useEffect(() => {
+    if (robotId) {
+      initLockboxSlots();
+    }
+  }, [robotId]);
 
   return null;
 }

@@ -12,9 +12,9 @@ export function LockboxPage() {
   const [tokenError, setTokenError] = useState(false);
 
   // 마운트 시 서버에서 실제 슬롯 상태 로드
-  useEffect(() => {
-    initLockboxSlots();
-  }, []);
+  // useEffect(() => {
+  //   initLockboxSlots();
+  // }, []);
 
   // Check for pending lockbox slot from voice command
   useEffect(() => {
