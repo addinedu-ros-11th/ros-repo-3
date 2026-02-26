@@ -71,7 +71,8 @@ async def add_to_guide_queue(
     db: AsyncSession = Depends(get_db),
 ):
     """Add POI to guide queue."""
-    session = await db.get(Session, session_id)
+    # Bug 2 fix: session row에 FOR UPDATE 잠금 → 같은 session의 동시 추가 요청을 직렬화
+    session = await db.get(Session, session_id, with_for_update=True)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -79,10 +80,13 @@ async def add_to_guide_queue(
     if not poi:
         raise HTTPException(status_code=404, detail="POI not found")
 
-    # Get next seq number
+    # Bug 1 fix: is_active == True 필터 추가 → 소프트 삭제된 항목 seq 제외
     max_seq_result = await db.execute(
         select(func.coalesce(func.max(GuideQueueItem.seq), 0))
-        .where(GuideQueueItem.session_id == session_id)
+        .where(
+            GuideQueueItem.session_id == session_id,
+            GuideQueueItem.is_active == True,
+        )
     )
     next_seq = max_seq_result.scalar() + 1
 

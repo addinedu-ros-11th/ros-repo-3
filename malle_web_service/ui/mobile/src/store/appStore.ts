@@ -239,7 +239,7 @@ const initialShoppingList: Product[] = [
   { id: '4', storeId: 'nike', name: 'Running Socks (3pk)', option: 'White', price: 18.00, completed: false },
   { id: '5', storeId: 'nike', name: 'Dri-FIT Headband', option: 'Black', price: 12.00, completed: true },
   { id: '6', storeId: 'apple', name: 'USB-C Charge Cable', option: '2m', price: 19.00, completed: false },
-  { id: '7', storeId: 'starbucks', name: 'Tumbler', option: 'Grande, Green', price: 24.00, completed: false },
+  // { id: '7', storeId: 'starbucks', name: 'Tumbler', option: 'Grande, Green', price: 24.00, completed: false },
   { id: '8', storeId: 'hm', name: 'Basic T-Shirt', option: 'Size L, White', price: 9.99, completed: false },
 ];
 
@@ -261,6 +261,9 @@ function mapPoi(p: PoiRes): POI {
     waitPoint: { x: p.wait_x_m ?? p.x_m - 2, y: p.wait_y_m ?? p.y_m - 2 },
     category: p.type || 'OTHER' };
 }
+
+/* localId 충돌 방지용 카운터 (Date.now()는 동기 루프에서 중복됨) */
+let _guideLocalSeq = 0;
 
 /* ==================== STORE ==================== */
 
@@ -394,7 +397,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   /* ───── Guide ───── */
 
   addToGuideQueue: (poi) => {
-    const localId = `guide-${Date.now()}`;
+    const localId = `guide-local-${++_guideLocalSeq}`;
     // 낙관적 UI 업데이트 (serverItemId는 API 응답 후 채움)
     set((s) => ({
       guideQueue: [...s.guideQueue, {
@@ -464,7 +467,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     return { guideQueue: nxt ? updated.map((i) => i.id === nxt.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i) : updated };
   }),
 
-  _setGuideQueueFromServer: (queue) => set({ guideQueue: queue }),
+  _setGuideQueueFromServer: (serverQueue) => set((s) => {
+    // 서버 큐에 이미 반영된 poiId 집합
+    const serverPoiIds = new Set(serverQueue.map((i) => i.poiId));
+
+    // serverItemId === null이고, 서버 큐에 없는 poiId의 낙관적 항목만 유지
+    // (WS가 API 응답보다 먼저 도착해도 같은 poiId가 중복되지 않음)
+    const pendingOptimistic = s.guideQueue.filter(
+      (i) => i.serverItemId === null && !serverPoiIds.has(i.poiId)
+    );
+
+    // 서버 큐 항목에 기존 선택 상태 병합 (사용자가 선택한 상태 보존)
+    const mergedServerItems = serverQueue.map((serverItem) => {
+      const existing = s.guideQueue.find((i) => i.serverItemId === serverItem.serverItemId);
+      return existing ? { ...serverItem, selected: existing.selected } : serverItem;
+    });
+
+    return { guideQueue: [...mergedServerItems, ...pendingOptimistic] };
+  }),
 
   /* ───── Follow ───── */
 
