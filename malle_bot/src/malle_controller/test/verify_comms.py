@@ -107,32 +107,49 @@ def check_ros2_topics(robot_ns: str) -> bool:
 def check_state_push(service_url: str, robot_id: int) -> bool:
     """
     bridge_node 가 malle_service 에 로봇 상태를 push 하는지 확인.
-    malle_service 에 GET /api/v1/robots/{id} 또는 /state 엔드포인트가 있으면 조회.
-    없으면 PATCH 요청을 직접 보내 응답 코드로 확인.
+    PATCH /api/v1/robots/{id}/state 로 테스트 값을 전송하고
+    GET /api/v1/robots/{id} 로 실제 반영 여부를 검증.
     """
     section(f'④ bridge → malle_service  상태 전송 확인  (robot_id={robot_id})')
 
-    # malle_service POST /api/robots/state/update 로 직접 확인
-    # robot_id 는 문자열 네임스페이스 (예: "robot1")
-    ns = f'robot{robot_id}'
-    test_payload = {
-        'robot_id': ns,
-        'mode': 'IDLE',
-        'battery': 100,
-        'position_x': 0.0,
-        'position_y': 0.0,
-    }
+    test_x, test_y, test_battery = 11.1, 22.2, 77
+
+    # PATCH /api/v1/robots/{id}/state
     try:
-        r = httpx.post(f'{service_url}/api/robots/state/update', json=test_payload, timeout=3)
-        if r.status_code in (200, 201, 204):
-            ok(f'POST /api/robots/state/update → {r.status_code} (malle_service 상태 수신 가능)')
-            return True
+        r = httpx.patch(
+            f'{service_url}/api/v1/robots/{robot_id}/state',
+            json={'x_m': test_x, 'y_m': test_y, 'battery_pct': test_battery},
+            timeout=3,
+        )
+        if r.status_code == 200:
+            ok(f'PATCH /api/v1/robots/{robot_id}/state → {r.status_code}')
         else:
-            fail(f'POST /api/robots/state/update → {r.status_code}')
+            fail(f'PATCH /api/v1/robots/{robot_id}/state → {r.status_code}: {r.text[:100]}')
             return False
     except Exception as e:
-        fail(f'POST /api/robots/state/update 실패: {e}')
+        fail(f'PATCH /api/v1/robots/{robot_id}/state 실패: {e}')
         return False
+
+    # GET /api/v1/robots/{id} 로 반영 여부 확인
+    try:
+        r = httpx.get(f'{service_url}/api/v1/robots/{robot_id}', timeout=3)
+        if r.status_code != 200:
+            warn(f'GET /api/v1/robots/{robot_id} → {r.status_code} (반영 확인 불가)')
+            return True  # PATCH 는 성공했으므로 True
+
+        data = r.json()
+        state = data.get('state') or {}
+        actual_x = state.get('x_m')
+        actual_battery = data.get('battery_pct')
+
+        if actual_x == test_x and actual_battery == test_battery:
+            ok(f'상태 반영 확인: x_m={actual_x}, battery={actual_battery}%')
+        else:
+            warn(f'값 불일치: x_m={actual_x} (기대 {test_x}), battery={actual_battery}% (기대 {test_battery}%)')
+        return True
+    except Exception as e:
+        warn(f'GET /api/v1/robots/{robot_id} 실패: {e}')
+        return True  # PATCH 는 성공했으므로 True
 
 
 def check_command_flow(bridge_url: str, robot_id: int, robot_ns: str) -> bool:

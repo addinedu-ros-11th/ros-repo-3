@@ -34,6 +34,7 @@ setup(
             'tag_tracker       = malle_controller.tag_tracker:main',
             'lockbox_controller= malle_controller.lockbox_controller:main',
             'battery_monitor   = malle_controller.battery_monitor:main',
+            'topic_relay       = malle_controller.topic_relay:main',
         ],
     },
 )
