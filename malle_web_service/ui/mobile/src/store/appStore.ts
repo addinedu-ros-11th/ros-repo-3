@@ -85,6 +85,7 @@ export interface LockboxLog {
 
 export interface Store {
   id: string;
+  slug: string;
   poi_id: number;
   name: string;
   category: string;
@@ -196,14 +197,14 @@ interface AppState {
 /* ───── fallback data ───── */
 
 const initialStores: Store[] = [
-  { id: 1, name: 'Zara', category: 'Fashion & Apparel', location: 'Level 2, Zone B', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
-  { id: 2, name: 'Nike', category: 'Sports & Outdoor', location: 'Level 1, Zone A', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
-  { id: 3, name: 'Apple', category: 'Electronics', location: 'Level 2, Zone C', icon: 'laptop_mac', open: true, closeTime: '9:30 PM' },
-  { id: 4, name: 'Intersport', category: 'Sports & Outdoor', location: 'Level 2, Zone B', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
-  { id: 5, name: 'SportyStyle', category: 'Fashion & Apparel', location: 'Level 1, Zone A', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
-  { id: 6, name: 'ProGym Equipment', category: 'Fitness', location: 'Ground Floor', icon: 'fitness_center', open: false, closeTime: '9:00 PM', openTime: '9:00 AM' },
-  { id: 7, name: 'Starbucks', category: 'Dining', location: 'Level 1, Zone B', icon: 'local_cafe', open: true, closeTime: '11:00 PM' },
-  { id: 8, name: 'H&M', category: 'Fashion & Apparel', location: 'Level 1, Zone C', icon: 'checkroom', open: true, closeTime: '9:00 PM' },
+  { id: '1', slug: 'zara',        poi_id: 1, name: 'Zara',             category: 'Fashion & Apparel',  location: 'Level 2, Zone B', icon: 'checkroom',        open: true,  closeTime: '10:00 PM' },
+  { id: '2', slug: 'nike',        poi_id: 2, name: 'Nike',             category: 'Sports & Outdoor',   location: 'Level 1, Zone A', icon: 'sports_basketball', open: true,  closeTime: '9:00 PM'  },
+  { id: '3', slug: 'apple',       poi_id: 3, name: 'Apple',            category: 'Electronics',        location: 'Level 2, Zone C', icon: 'laptop_mac',       open: true,  closeTime: '9:30 PM'  },
+  { id: '4', slug: 'intersport',  poi_id: 4, name: 'Intersport',       category: 'Sports & Outdoor',   location: 'Level 2, Zone B', icon: 'sports_basketball', open: true,  closeTime: '9:00 PM'  },
+  { id: '5', slug: 'sportstyle',  poi_id: 5, name: 'SportyStyle',      category: 'Fashion & Apparel',  location: 'Level 1, Zone A', icon: 'checkroom',        open: true,  closeTime: '10:00 PM' },
+  { id: '6', slug: 'progym',      poi_id: 6, name: 'ProGym Equipment', category: 'Fitness',            location: 'Ground Floor',    icon: 'fitness_center',   open: false, closeTime: '9:00 PM'  },
+  { id: '7', slug: 'starbucks',   poi_id: 7, name: 'Starbucks',        category: 'Dining',             location: 'Level 1, Zone B', icon: 'local_cafe',       open: true,  closeTime: '11:00 PM' },
+  { id: '8', slug: 'hm',          poi_id: 8, name: 'H&M',              category: 'Fashion & Apparel',  location: 'Level 1, Zone C', icon: 'checkroom',        open: true,  closeTime: '9:00 PM'  },
 ];
 
 const initialPOIs: POI[] = [
@@ -250,7 +251,8 @@ const catIcon: Record<string, string> = {
 };
 function mapStore(s: StoreRes): Store {
   const c = (s.category || 'other').toLowerCase();
-  return { id: String(s.id), poi_id: s.poi_id, name: s.name || `Store #${s.id}`, category: s.category || 'Other',
+  const slug = (s.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return { id: String(s.id), slug, poi_id: s.poi_id, name: s.name || `Store #${s.id}`, category: s.category || 'Other',
     location: `(${s.x_m?.toFixed(0) ?? 0}, ${s.y_m?.toFixed(0) ?? 0})`,
     icon: catIcon[c] || 'store', open: true, closeTime: '9:00 PM' };
 }
