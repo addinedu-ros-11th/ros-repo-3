@@ -5,6 +5,12 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
+import os
+
+ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "")
+
+def _ns(name: str) -> str:
+    return f"/{ROBOT_NAMESPACE}/{name.lstrip('/')}" if ROBOT_NAMESPACE else f"/{name.lstrip('/')}"
 
 
 class NavCore:
@@ -13,8 +19,8 @@ class NavCore:
         """미션 노드의 __init__에서 호출"""
         self._node = node
 
-        self._nav_client = ActionClient(node, NavigateToPose, 'navigate_to_pose')
-        self._cmd_pub = node.create_publisher(Twist, '/cmd_vel', 10)
+        self._nav_client = ActionClient(node, NavigateToPose, _ns('navigate_to_pose'))
+        self._cmd_pub = node.create_publisher(Twist, _ns('cmd_vel'), 10)
 
         self._current_goal_handle = None
 
