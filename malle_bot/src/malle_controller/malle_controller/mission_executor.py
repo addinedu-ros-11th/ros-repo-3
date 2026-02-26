@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import String, Float32
 from enum import Enum, auto
 
 from malle_controller.msg import TaskCommand, RobotMessage, MessageHeader
@@ -35,6 +35,8 @@ class MissionExecutor(Node):
             String, '/malle/mission_result', self._on_mission_result, 10)
         self.battery_sub = self.create_subscription(
             String, '/malle/battery_status', self._on_battery, 10)
+        self.battery_pct_sub = self.create_subscription(
+            Float32, '/battery/present', self._on_battery_pct, 10)
 
         self.state_pub   = self.create_publisher(RobotMessage, '/malle/robot_state', 10)
         self.trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
@@ -102,6 +104,9 @@ class MissionExecutor(Node):
             self._transition(next_state)
         else:
             self.get_logger().warn(f"처리되지 않은 result: '{result}' (state: {self.state.name})")
+
+    def _on_battery_pct(self, msg: Float32):
+        self.battery = msg.data
 
     def _on_battery(self, msg: String):
         if msg.data.strip().lower() == 'charged' and self.state == RobotState.CHARGING:
