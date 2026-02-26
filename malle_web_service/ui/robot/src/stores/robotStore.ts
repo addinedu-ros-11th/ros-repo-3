@@ -148,6 +148,9 @@ const initialNotifications: Notification[] = [
   { id: '4', category: 'SYSTEM', title: 'Battery Low Warning', description: 'Battery at 25%', timestamp: new Date(Date.now() - 75 * 60000), read: true },
 ];
 
+/* localId 충돌 방지용 카운터 (Date.now()는 동기 루프에서 중복됨) */
+let _guideLocalSeq = 0;
+
 export const useRobotStore = create<RobotStore>((set, get) => ({
   // ★ Server IDs
   currentSessionId: null,
@@ -218,7 +221,7 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   // ── Guide ────────────────────────────────────────────────────────────────
 
   addToGuideQueue: (item) => {
-    const localId = `guide-${Date.now()}`;
+    const localId = `guide-local-${++_guideLocalSeq}`;
     set((state) => ({
       guide: {
         ...state.guide,
@@ -309,10 +312,24 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     },
   })),
 
-  // ★ WS-driven: 서버에서 큐 전체 교체 (serverItemId 포함)
-  _setGuideQueueFromServer: (queue) => set((state) => ({
-    guide: { ...state.guide, queue },
-  })),
+  // ★ WS-driven: 서버 큐와 로컬 낙관적 항목 병합
+  _setGuideQueueFromServer: (serverQueue) => set((state) => {
+    // 서버 큐에 이미 반영된 poiId 집합
+    const serverPoiIds = new Set(serverQueue.map((i) => i.poiId));
+
+    // serverItemId === null이고 서버 큐에 없는 poiId의 낙관적 항목만 유지
+    const pendingOptimistic = state.guide.queue.filter(
+      (i) => i.serverItemId === null && !serverPoiIds.has(i.poiId)
+    );
+
+    // 서버 큐 항목에 기존 선택 상태 병합
+    const mergedServerItems = serverQueue.map((serverItem) => {
+      const existing = state.guide.queue.find((i) => i.serverItemId === serverItem.serverItemId);
+      return existing ? { ...serverItem, selected: existing.selected } : serverItem;
+    });
+
+    return { guide: { ...state.guide, queue: [...mergedServerItems, ...pendingOptimistic] } };
+  }),
 
   // ── Follow ───────────────────────────────────────────────────────────────
 

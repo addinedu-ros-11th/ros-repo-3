@@ -513,7 +513,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPickupStatus: (status) => set((s) => {
     const u: Partial<AppState> = {
       pickupOrder: s.pickupOrder ? { ...s.pickupOrder, status } : null,
-      robot: s.robot ? { ...s.robot, mode: status !== 'DONE' && status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
+      robot: s.robot ? { ...s.robot, mode: status === 'DONE' ? null : status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
     };
     if (status === 'RETURNING' && s.pickupOrder?.slotId)
       u.lockboxSlots = s.lockboxSlots.map(slot => slot.slotNumber === s.pickupOrder!.slotId ? { ...slot, status: 'PICKED_UP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : slot);
