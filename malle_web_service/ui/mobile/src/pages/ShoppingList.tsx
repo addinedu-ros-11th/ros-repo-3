@@ -47,10 +47,10 @@ export default function ShoppingList() {
     });
     
     if (storesToAdd.length > 0) {
-      toast.success(`${storesToAdd.length}개 스토어를 Guide queue에 추가했습니다`);
+      toast.success(`${storesToAdd.length}개 스토어를 Guide queue에 추가했습니다`, { duration: 1500 });
       navigate('/mode/guide');
     } else {
-      toast.error('추가할 미완료 항목이 없습니다');
+      toast.error('추가할 미완료 항목이 없습니다', { duration: 1500 });
     }
   };
 
@@ -67,7 +67,7 @@ export default function ShoppingList() {
       option: product.option,
       price: product.price,
     });
-    toast.success(`${product.name} added`);
+    toast.success(`${product.name} added`, { duration: 1500 });
     setShowAddForm(false);
     setAddStep('store');
     setSelectedStoreId(null);
@@ -75,7 +75,7 @@ export default function ShoppingList() {
 
   const handleDelete = (id: string, name: string) => {
     removeFromShoppingList(id);
-    toast.success(`${name} removed`);
+    toast.success(`${name} removed`, { duration: 1500 });
   };
 
   const handleItemClick = (product: typeof shoppingList[0]) => {
@@ -89,7 +89,7 @@ export default function ShoppingList() {
     const poi = store ? pois.find(p => p.id === store.poi_id) : undefined;
     if (poi) {
       addToGuideQueue(poi);
-      toast.success(`${poi.name} added to Guide queue`);
+      toast.success(`${poi.name} added to Guide queue`, { duration: 1500 });
       navigate('/mode/guide');
     }
     setActionItem(null);
