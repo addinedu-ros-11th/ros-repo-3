@@ -85,6 +85,7 @@ export interface LockboxLog {
 
 export interface Store {
   id: string;
+  poi_id: number;
   name: string;
   category: string;
   location: string;
@@ -195,25 +196,25 @@ interface AppState {
 /* ───── fallback data ───── */
 
 const initialStores: Store[] = [
-  { id: 'zara', name: 'Zara', category: 'Fashion & Apparel', location: 'Level 2, Zone B', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
-  { id: 'nike', name: 'Nike', category: 'Sports & Outdoor', location: 'Level 1, Zone A', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
-  { id: 'apple', name: 'Apple', category: 'Electronics', location: 'Level 2, Zone C', icon: 'laptop_mac', open: true, closeTime: '9:30 PM' },
-  { id: 'intersport', name: 'Intersport', category: 'Sports & Outdoor', location: 'Level 2, Zone B', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
-  { id: 'sportystyle', name: 'SportyStyle', category: 'Fashion & Apparel', location: 'Level 1, Zone A', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
-  { id: 'progym', name: 'ProGym Equipment', category: 'Fitness', location: 'Ground Floor', icon: 'fitness_center', open: false, closeTime: '9:00 PM', openTime: '9:00 AM' },
-  { id: 'starbucks', name: 'Starbucks', category: 'Dining', location: 'Level 1, Zone B', icon: 'local_cafe', open: true, closeTime: '11:00 PM' },
-  { id: 'hm', name: 'H&M', category: 'Fashion & Apparel', location: 'Level 1, Zone C', icon: 'checkroom', open: true, closeTime: '9:00 PM' },
+  { id: 1, name: 'Zara', category: 'Fashion & Apparel', location: 'Level 2, Zone B', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
+  { id: 2, name: 'Nike', category: 'Sports & Outdoor', location: 'Level 1, Zone A', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
+  { id: 3, name: 'Apple', category: 'Electronics', location: 'Level 2, Zone C', icon: 'laptop_mac', open: true, closeTime: '9:30 PM' },
+  { id: 4, name: 'Intersport', category: 'Sports & Outdoor', location: 'Level 2, Zone B', icon: 'sports_basketball', open: true, closeTime: '9:00 PM' },
+  { id: 5, name: 'SportyStyle', category: 'Fashion & Apparel', location: 'Level 1, Zone A', icon: 'checkroom', open: true, closeTime: '10:00 PM' },
+  { id: 6, name: 'ProGym Equipment', category: 'Fitness', location: 'Ground Floor', icon: 'fitness_center', open: false, closeTime: '9:00 PM', openTime: '9:00 AM' },
+  { id: 7, name: 'Starbucks', category: 'Dining', location: 'Level 1, Zone B', icon: 'local_cafe', open: true, closeTime: '11:00 PM' },
+  { id: 8, name: 'H&M', category: 'Fashion & Apparel', location: 'Level 1, Zone C', icon: 'checkroom', open: true, closeTime: '9:00 PM' },
 ];
 
 const initialPOIs: POI[] = [
-  { id: 'zara', name: 'Zara', x: 40, y: 90, waitPoint: { x: 38, y: 88 }, category: 'Fashion' },
-  { id: 'nike', name: 'Nike', x: 280, y: 80, waitPoint: { x: 278, y: 78 }, category: 'Sports' },
-  { id: 'apple', name: 'Apple', x: 160, y: 30, waitPoint: { x: 158, y: 28 }, category: 'Electronics' },
-  { id: 'starbucks', name: 'Starbucks', x: 120, y: 150, waitPoint: { x: 118, y: 148 }, category: 'Dining' },
-  { id: 'hm', name: 'H&M', x: 220, y: 120, waitPoint: { x: 218, y: 118 }, category: 'Fashion' },
-  { id: 'intersport', name: 'Intersport', x: 300, y: 140, waitPoint: { x: 298, y: 138 }, category: 'Sports' },
-  { id: 'sportystyle', name: 'SportyStyle', x: 60, y: 150, waitPoint: { x: 58, y: 148 }, category: 'Fashion' },
-  { id: 'progym', name: 'ProGym Equipment', x: 200, y: 40, waitPoint: { x: 198, y: 38 }, category: 'Fitness' },
+  { id: 1, name: 'Zara', x: 40, y: 90, waitPoint: { x: 38, y: 88 }, category: 'Fashion' },
+  { id: 2, name: 'Nike', x: 280, y: 80, waitPoint: { x: 278, y: 78 }, category: 'Sports' },
+  { id: 3, name: 'Apple', x: 160, y: 30, waitPoint: { x: 158, y: 28 }, category: 'Electronics' },
+  { id: 7, name: 'Starbucks', x: 120, y: 150, waitPoint: { x: 118, y: 148 }, category:'Dining' },
+  { id: 8, name: 'H&M', x: 220, y: 120, waitPoint: { x: 218, y: 118 }, category:'Fashion'},
+  { id: 4, name: 'Intersport', x: 300, y: 140, waitPoint: { x: 298, y: 138 }, category: 'Sports' },
+  { id: 5, name: 'SportyStyle', x: 60, y: 150, waitPoint: { x: 58, y: 148 }, category: 'Fashion' },
+  { id: 6, name: 'ProGym Equipment', x: 200, y: 40, waitPoint: { x: 198, y: 38 }, category: 'Fitness' },
 ];
 
 const initialLockboxSlots: LockboxSlot[] = [
@@ -249,12 +250,12 @@ const catIcon: Record<string, string> = {
 };
 function mapStore(s: StoreRes): Store {
   const c = (s.category || 'other').toLowerCase();
-  return { id: String(s.id), name: s.name || `Store #${s.id}`, category: s.category || 'Other',
+  return { id: String(s.id), poi_id: s.poi_id, name: s.name || `Store #${s.id}`, category: s.category || 'Other',
     location: `(${s.x_m?.toFixed(0) ?? 0}, ${s.y_m?.toFixed(0) ?? 0})`,
     icon: catIcon[c] || 'store', open: true, closeTime: '9:00 PM' };
 }
 function mapPoi(p: PoiRes): POI {
-  return { id: String(p.id), name: p.name, x: p.x_m, y: p.y_m,
+  return { id: p.id, name: p.name, x: p.x_m, y: p.y_m,
     waitPoint: { x: p.wait_x_m ?? p.x_m - 2, y: p.wait_y_m ?? p.y_m - 2 },
     category: p.type || 'OTHER' };
 }
@@ -397,7 +398,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       guideQueue: [...s.guideQueue, {
         id: localId,
         serverItemId: null,
-        poiId: poi.id,
+        poiId: String(poi.id),
         poiName: poi.name,
         floor: 'Level 1',
         estimatedTime: Math.floor(Math.random() * 5) + 2,
@@ -407,7 +408,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
     const { currentSessionId } = get();
     if (currentSessionId) {
-      guideApi.addToQueue(currentSessionId, Number(poi.id))
+      guideApi.addToQueue(currentSessionId, poi.id)
         .then((res) => {
           // 서버 item id를 localId로 찾아서 업데이트
           set((s) => ({

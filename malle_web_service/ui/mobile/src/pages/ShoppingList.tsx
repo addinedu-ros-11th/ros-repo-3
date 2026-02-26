@@ -28,16 +28,30 @@ export default function ShoppingList() {
   const storeCount = Object.keys(groupedProducts).length;
 
   const handleOptimizeRoute = () => {
+    const storesToAdd: typeof pois = [];
+    
     Object.keys(groupedProducts).forEach(storeId => {
       const hasIncomplete = groupedProducts[storeId].some(p => !p.completed);
       if (hasIncomplete) {
-        const poi = pois.find(p => p.id === storeId);
-        if (poi) {
-          addToGuideQueue(poi);
+        // storeId (string)를 number로 변환하여 stores 찾기
+        const store = stores.find(s => String(s.id) === storeId);
+        if (store && store.poi_id) {
+          // store.poi_id로 pois 찾기
+          const poi = pois.find(p => p.id === store.poi_id);
+          if (poi) {
+            storesToAdd.push(poi);
+            addToGuideQueue(poi);
+          }
         }
       }
     });
-    navigate('/mode/guide');
+    
+    if (storesToAdd.length > 0) {
+      toast.success(`${storesToAdd.length}개 스토어를 Guide queue에 추가했습니다`);
+      navigate('/mode/guide');
+    } else {
+      toast.error('추가할 미완료 항목이 없습니다');
+    }
   };
 
   const handleSelectStore = (storeId: string) => {
@@ -71,7 +85,7 @@ export default function ShoppingList() {
 
   const handleGuideAction = () => {
     if (!actionItem) return;
-    const poi = pois.find(p => p.id === actionItem.storeId);
+    const poi = pois.find(p => String(p.id) === actionItem.storeId);
     if (poi) {
       addToGuideQueue(poi);
       toast.success(`${poi.name} added to Guide queue`);
