@@ -33,16 +33,19 @@ BRIDGE_HTTP_PORT = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
 STATE_UPDATE_INTERVAL = 0.5  # seconds between state pushes
 
 # Robot ID mapping: ROS2 namespace → DB robot_id
-# TODO: 실제 로봇 네임스페이스에 맞게 수정
-ROBOT_NS_TO_ID = {
-    "robot1": 1,
-    "robot2": 2,
-    "robot3": 3,
-    "robot4": 4,
-    "robot5": 5,
-    "robot6": 6,
-    "robot17": 17,
-}
+# 환경변수 ROBOT_NS_MAP 으로 주입 (형식: "robot1:1,robot2:2")
+# 미설정 시 robot1:1 단일 로봇으로 동작
+def _parse_robot_ns_map(env: str) -> dict:
+    result = {}
+    for entry in env.split(","):
+        entry = entry.strip()
+        if ":" not in entry:
+            continue
+        ns, rid = entry.split(":", 1)
+        result[ns.strip()] = int(rid.strip())
+    return result
+
+ROBOT_NS_TO_ID = _parse_robot_ns_map(os.getenv("ROBOT_NS_MAP", "robot1:1"))
 ROBOT_ID_TO_NS = {v: k for k, v in ROBOT_NS_TO_ID.items()}
 
 
