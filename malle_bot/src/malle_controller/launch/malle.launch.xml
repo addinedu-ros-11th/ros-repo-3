@@ -1,6 +1,7 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
   <arg name="robot_id"        default="malle_01"/>
+  <arg name="robot_ns"        default="robot1"/>
   <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
   <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
 
@@ -39,7 +40,15 @@
     <param name="interface" value="$(var lockbox_iface)"/>
   </node>
 
+  <!-- ===== topic_relay  –  /odom, /battery/present → /{robot_ns}/ ===== -->
+  <node pkg="malle_controller" exec="topic_relay" name="topic_relay"
+        output="screen">
+    <param name="robot_ns" value="$(var robot_ns)"/>
+  </node>
+
   <!-- ===== battery_monitor ===== -->
   <node pkg="malle_controller" exec="battery_monitor" name="battery_monitor"
-        output="screen"/>
+        output="screen">
+    <param name="battery_topic" value="$(var robot_ns)/battery"/>
+  </node>
 </launch>

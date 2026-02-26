@@ -96,6 +96,15 @@ if __name__ == '__main__':
     main()
 ")
 
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/topic_relay
+"#!/usr/bin/env python3
+import sys
+sys.path.insert(0, '${CMAKE_INSTALL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages')
+from malle_controller.topic_relay import main
+if __name__ == '__main__':
+    main()
+")
+
 # launch 및 config 파일 설치
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
@@ -109,6 +118,7 @@ install(PROGRAMS
   ${CMAKE_CURRENT_BINARY_DIR}/tag_tracker
   ${CMAKE_CURRENT_BINARY_DIR}/lockbox_controller
   ${CMAKE_CURRENT_BINARY_DIR}/battery_monitor
+  ${CMAKE_CURRENT_BINARY_DIR}/topic_relay
   DESTINATION lib/${PROJECT_NAME}
 )
 
