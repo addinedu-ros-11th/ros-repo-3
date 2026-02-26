@@ -34,7 +34,7 @@ export default function ShoppingList() {
       const hasIncomplete = groupedProducts[storeId].some(p => !p.completed);
       if (hasIncomplete) {
         // storeId (string)를 number로 변환하여 stores 찾기
-        const store = stores.find(s => String(s.id) === storeId);
+        const store = stores.find(s => s.slug === storeId || String(s.id) === storeId);
         if (store && store.poi_id) {
           // store.poi_id로 pois 찾기
           const poi = pois.find(p => p.id === store.poi_id);
@@ -85,7 +85,8 @@ export default function ShoppingList() {
 
   const handleGuideAction = () => {
     if (!actionItem) return;
-    const poi = pois.find(p => String(p.id) === actionItem.storeId);
+    const store = stores.find(s => s.slug === actionItem.storeId || String(s.id) === actionItem.storeId);
+    const poi = store ? pois.find(p => p.id === store.poi_id) : undefined;
     if (poi) {
       addToGuideQueue(poi);
       toast.success(`${poi.name} added to Guide queue`);
@@ -192,7 +193,7 @@ export default function ShoppingList() {
       {/* Store Groups */}
       <div className="space-y-4">
         {Object.entries(groupedProducts).map(([storeId, products]) => {
-          const store = stores.find(s => s.id === storeId);
+          const store = stores.find(s => s.slug === storeId || s.id === storeId);
           if (!store) return null;
 
           const completedCount = products.filter(p => p.completed).length;
@@ -273,7 +274,7 @@ export default function ShoppingList() {
             <div className="w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto mb-2" />
             <h3 className="font-bold text-foreground text-center">{actionItem.name}</h3>
             <p className="text-xs text-muted-foreground text-center mb-2">
-              {stores.find(s => s.id === actionItem.storeId)?.name}
+              {stores.find(s => s.slug === actionItem.storeId || s.id === actionItem.storeId)?.name}
             </p>
 
             <button
