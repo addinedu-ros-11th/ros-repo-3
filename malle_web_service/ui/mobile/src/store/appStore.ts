@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { sessionApi } from '@/api/sessions';
 import { guideApi } from '@/api/guide';
-import { pickupApi, lockboxApi, storeApi, poiApi, type PoiRes, type StoreRes } from '@/api/services';
+import { pickupApi, lockboxApi, storeApi, poiApi, type PoiRes, type StoreRes, type LockboxSlotRes } from '@/api/services';
 import { storeProducts as hardcodedStoreProducts } from '@/data/storeProducts';
 
 export type SessionState = 'NO_SESSION' | 'FINDING_ROBOT' | 'ROBOT_ASSIGNED' | 'APPROACHING' | 'PIN_MATCHING' | 'ACTIVE' | 'ENDED';
@@ -178,6 +178,9 @@ interface AppState {
   openSlot: (slotNumber: number) => void;
   confirmSlotFull: (slotNumber: number) => void;
   confirmSlotEmpty: (slotNumber: number) => void;
+  initLockboxSlots: (robotId: number) => void;
+  _setLockboxSlotsFromServer: (slots: LockboxSlotRes[]) => void;
+  _onLockboxOpened: (slotNumber: number) => void;
 
   tickTimer: () => void;
   tickApproachingEta: () => void;
@@ -218,19 +221,6 @@ const initialPOIs: POI[] = [
   { id: 6, name: 'ProGym Equipment', x: 200, y: 40, waitPoint: { x: 198, y: 38 }, category: 'Fitness' },
 ];
 
-const initialLockboxSlots: LockboxSlot[] = [
-  { slotNumber: 1, status: 'FULL', occupiedSince: '10:30 AM' },
-  { slotNumber: 2, status: 'FULL', occupiedSince: '11:15 AM' },
-  { slotNumber: 3, status: 'RESERVED', orderInfo: { orderId: '#8821', storeName: 'Zara Store', customerName: 'Sarah' } },
-  { slotNumber: 4, status: 'EMPTY' },
-  { slotNumber: 5, status: 'EMPTY' },
-];
-
-const initialLockboxLogs: LockboxLog[] = [
-  { id: '1', timestamp: new Date(Date.now() - 3600000), slotNumber: 1, action: 'SECURED', result: 'SUCCESS', description: 'Items securely stored' },
-  { id: '2', timestamp: new Date(Date.now() - 7200000), slotNumber: 2, action: 'OPENED', result: 'SUCCESS', description: 'Slot opened for storage' },
-  { id: '3', timestamp: new Date(Date.now() - 10800000), slotNumber: 3, action: 'SECURED', result: 'FAILURE', description: 'Lock mechanism failed' },
-];
 
 const initialShoppingList: Product[] = [
   { id: '1', storeId: 'zara', name: 'Linen Blend Shirt', option: 'Size M, Beige', price: 45.90, completed: false },
@@ -262,6 +252,15 @@ function mapPoi(p: PoiRes): POI {
     category: p.type || 'OTHER' };
 }
 
+/* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
+const initialLockboxSlots: LockboxSlot[] = [
+  { slotNumber: 1, status: 'EMPTY' },
+  { slotNumber: 2, status: 'EMPTY' },
+  { slotNumber: 3, status: 'EMPTY' },
+  { slotNumber: 4, status: 'EMPTY' },
+  { slotNumber: 5, status: 'EMPTY' },
+];
+
 /* localId 충돌 방지용 카운터 (Date.now()는 동기 루프에서 중복됨) */
 let _guideLocalSeq = 0;
 
@@ -283,7 +282,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   followMe: { active: false, tagNumber: 11, status: 'STOPPED' },
   pickupOrder: null,
   lockboxSlots: initialLockboxSlots,
-  lockboxLogs: initialLockboxLogs,
+  lockboxLogs: [],
   shoppingList: initialShoppingList,
   searchState: { query: '', filter: 'All', results: initialStores, isOpen: false },
   stores: initialStores,
@@ -386,7 +385,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   endSession: () => {
     const { currentSessionId } = get();
     if (currentSessionId) sessionApi.end(currentSessionId).catch(() => {});
-    set({ sessionState: 'NO_SESSION', robot: null, session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null }, taskMission: null, guideQueue: [], followMe: { active: false, tagNumber: 11, status: 'STOPPED' }, pickupOrder: null, currentSessionId: null, currentRobotId: null, matchPin: null });
+    set({ sessionState: 'NO_SESSION', robot: null, session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null }, taskMission: null, guideQueue: [], followMe: { active: false, tagNumber: 11, status: 'STOPPED' }, pickupOrder: null, currentSessionId: null, currentRobotId: null, matchPin: null, lockboxSlots: initialLockboxSlots, lockboxLogs: [] });
   },
 
   setRobotMode: (mode) => set((s) => ({ robot: s.robot ? { ...s.robot, mode } : null })),
@@ -529,12 +528,44 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (currentRobotId) lockboxApi.openSlot(currentRobotId, slotNumber).catch(() => {});
   },
   confirmSlotFull: (slotNumber) => {
+    const now = new Date();
     set((s) => ({
-      lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'FULL', occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : sl),
-      lockboxLogs: [{ id: `log-${Date.now()}`, timestamp: new Date(), slotNumber, action: 'SECURED' as const, result: 'SUCCESS' as const, description: 'Items securely stored' }, ...s.lockboxLogs].slice(0, 10),
+      lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'FULL' as LockboxStatus, occupiedSince: now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : sl),
+      lockboxLogs: [{ id: `log-${now.getTime()}`, timestamp: now, slotNumber, action: 'SECURED' as const, result: 'SUCCESS' as const, description: 'Items securely stored' }, ...s.lockboxLogs].slice(0, 10),
     }));
+    const { currentRobotId } = get();
+    if (currentRobotId) lockboxApi.updateSlotStatus(currentRobotId, slotNumber, 'FULL').catch(() => {});
   },
-  confirmSlotEmpty: (slotNumber) => set((s) => ({ lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'EMPTY', occupiedSince: undefined, orderInfo: undefined } : sl) })),
+  confirmSlotEmpty: (slotNumber) => {
+    set((s) => ({ lockboxSlots: s.lockboxSlots.map((sl) => sl.slotNumber === slotNumber ? { ...sl, status: 'EMPTY' as LockboxStatus, occupiedSince: undefined, orderInfo: undefined } : sl) }));
+    const { currentRobotId } = get();
+    if (currentRobotId) lockboxApi.updateSlotStatus(currentRobotId, slotNumber, 'EMPTY').catch(() => {});
+  },
+
+  initLockboxSlots: (robotId) => {
+    lockboxApi.getSlots(robotId)
+      .then((slots) => useAppStore.getState()._setLockboxSlotsFromServer(slots))
+      .catch(() => {});
+  },
+
+  _setLockboxSlotsFromServer: (serverSlots) => set((s) => ({
+    lockboxSlots: serverSlots.map((sl) => {
+      const existing = s.lockboxSlots.find((e) => e.slotNumber === sl.slot_no);
+      return {
+        slotNumber: sl.slot_no,
+        status: (sl.status === 'PICKEDUP' ? 'PICKED_UP' : sl.status) as LockboxStatus,
+        occupiedSince: existing?.occupiedSince,
+        orderInfo: existing?.orderInfo,
+      };
+    }),
+  })),
+
+  _onLockboxOpened: (slotNumber) => set((s) => ({
+    lockboxLogs: [
+      { id: `log-${Date.now()}`, timestamp: new Date(), slotNumber, action: 'OPENED' as const, result: 'SUCCESS' as const, description: `Slot ${slotNumber} opened` },
+      ...s.lockboxLogs,
+    ].slice(0, 10),
+  })),
 
   /* ───── Timer ───── */
 

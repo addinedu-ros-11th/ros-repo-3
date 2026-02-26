@@ -53,6 +53,7 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
           mode: null,
           location: { x: p.x_m ?? 0, y: p.y_m ?? 0 },
         });
+        store.initLockboxSlots(robotId);
       }
       break;
     }
@@ -145,13 +146,27 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
     /* ───── Lockbox events ───── */
 
     case "LOCKBOX_OPENED":
-      // payload: { slot_no }
-      if (p.slot_no) store.openSlot(p.slot_no);
+      // API 재호출 없이 로그만 기록 (openSlot()을 호출하면 API 무한루프 발생)
+      if (p.slot_no) store._onLockboxOpened(p.slot_no);
       break;
 
+    case "LOCKBOX_UPDATED": {
+      // payload: { slots: SlotResponse[] }
+      const slots = (p.slots as any[]) ?? [];
+      if (slots.length) store._setLockboxSlotsFromServer(slots);
+      break;
+    }
+
     case "LOCKBOX_STORED":
-      // payload: { slot_no }
-      if (p.slot_no) store.confirmSlotFull(p.slot_no);
+      // 상태는 LOCKBOX_UPDATED로 처리; 여기선 로그만 추가
+      if (p.slot_no) {
+        useAppStore.setState((s) => ({
+          lockboxLogs: [
+            { id: `log-${Date.now()}`, timestamp: new Date(), slotNumber: p.slot_no, action: "SECURED" as const, result: "SUCCESS" as const, description: `Slot ${p.slot_no} secured` },
+            ...s.lockboxLogs,
+          ].slice(0, 10),
+        }));
+      }
       break;
 
     /* ───── Robot events ───── */

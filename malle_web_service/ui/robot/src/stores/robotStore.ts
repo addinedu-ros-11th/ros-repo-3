@@ -22,7 +22,7 @@ import { parseVoiceCommand, resolveStoreName } from '@/lib/voiceParser';
 import { stores, getProductsByStore } from '@/data/stores';
 import { sessionApi } from '@/api/sessions';
 import { guideApi } from '@/api/guide';
-import { pickupApi, lockboxApi } from '@/api/services';
+import { pickupApi, lockboxApi, type LockboxSlotRes } from '@/api/services';
 
 interface RobotStore {
   // ★ Server IDs
@@ -97,6 +97,10 @@ interface RobotStore {
   setSlotStatus: (slotNumber: number, status: LockboxSlot['status'], orderInfo?: LockboxSlot['orderInfo']) => void;
   addLockboxLog: (log: Omit<LockboxLog, 'id'>) => void;
   openSlot: (slotNumber: number) => void;
+  updateSlotStatus: (slotNumber: number, status: LockboxSlot['status']) => void;
+  initLockboxSlots: () => void;
+  _setLockboxSlotsFromServer: (slots: LockboxSlotRes[]) => void;
+  _onLockboxOpened: (slotNo: number) => void;
 
   // Actions - Notifications
   addNotification: (notification: Omit<Notification, 'id' | 'timestamp' | 'read'>) => void;
@@ -127,25 +131,21 @@ const initialRobot: Robot = {
   status: 'IDLE',
 };
 
-const initialLockboxSlots: LockboxSlot[] = [
-  { number: 1, status: 'FULL', occupiedSince: '10:30 AM', isPickupOrder: true, pickedUp: true, orderInfo: { orderId: '#7743', storeName: 'Zara', customerName: 'Sarah' } },
-  { number: 2, status: 'FULL', occupiedSince: '11:15 AM' },
-  { number: 3, status: 'RESERVED', orderInfo: { orderId: '#8821', storeName: 'Zara Store', customerName: 'Sarah' } },
-  { number: 4, status: 'EMPTY' },
-  { number: 5, status: 'EMPTY' },
-];
-
-const initialLockboxLogs: LockboxLog[] = [
-  { id: '1', timestamp: '10:30 AM', slotNumber: 1, action: 'SECURED', result: 'SUCCESS', description: 'Slot 1 locked after item storage' },
-  { id: '2', timestamp: '10:15 AM', slotNumber: 2, action: 'OPENED', result: 'SUCCESS', description: 'Slot 2 opened for retrieval' },
-  { id: '3', timestamp: '09:45 AM', slotNumber: 3, action: 'SECURED', result: 'SUCCESS', description: 'Slot 3 reserved for pickup order' },
-];
 
 const initialNotifications: Notification[] = [
   { id: '1', category: 'NAVIGATION', title: 'Arrived at Zara', description: 'Waiting for customer', timestamp: new Date(Date.now() - 30 * 60000), read: false },
   { id: '2', category: 'LOCKBOX', title: 'Slot 2 Opened', description: 'Successful retrieval', timestamp: new Date(Date.now() - 45 * 60000), read: true },
   { id: '3', category: 'PICKUP', title: 'New Pickup Order', description: 'Order #8821 from Zara', timestamp: new Date(Date.now() - 60 * 60000), read: true },
   { id: '4', category: 'SYSTEM', title: 'Battery Low Warning', description: 'Battery at 25%', timestamp: new Date(Date.now() - 75 * 60000), read: true },
+];
+
+/* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
+const initialLockboxSlots: LockboxSlot[] = [
+  { number: 1, status: 'EMPTY' },
+  { number: 2, status: 'EMPTY' },
+  { number: 3, status: 'EMPTY' },
+  { number: 4, status: 'EMPTY' },
+  { number: 5, status: 'EMPTY' },
 ];
 
 /* localId 충돌 방지용 카운터 (Date.now()는 동기 루프에서 중복됨) */
@@ -168,7 +168,7 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   pickup: { currentOrder: null, showLoadingOverlay: false },
 
   lockboxSlots: initialLockboxSlots,
-  lockboxLogs: initialLockboxLogs,
+  lockboxLogs: [],
   notifications: initialNotifications,
   notificationPanelOpen: false,
   showPinOverlay: false,
@@ -198,6 +198,8 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       follow: { active: false, tagNumber: null, status: 'STOPPED' },
       pickup: { currentOrder: null, showLoadingOverlay: false },
       currentSessionId: null,
+      lockboxSlots: initialLockboxSlots,
+      lockboxLogs: [],
     });
   },
 
@@ -440,7 +442,48 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       result: 'SUCCESS',
       description: `Slot ${slotNumber} opened`,
     });
-    if (state.currentRobotId) lockboxApi.openSlot(state.currentRobotId, slotNumber).catch(() => {});
+    const robotId = state.currentRobotId ?? Number(state.robot.id);
+    if (robotId) lockboxApi.openSlot(robotId, slotNumber).catch(() => {});
+  },
+
+  updateSlotStatus: (slotNumber, status) => {
+    const state = get();
+    state.setSlotStatus(slotNumber, status);
+    const robotId = state.currentRobotId ?? Number(state.robot.id);
+    if (robotId) lockboxApi.updateSlotStatus(robotId, slotNumber, status).catch(() => {});
+  },
+
+  initLockboxSlots: () => {
+    const state = get();
+    const robotId = state.currentRobotId ?? Number(state.robot.id);
+    if (!robotId) return;
+    lockboxApi.getSlots(robotId)
+      .then((slots) => useRobotStore.getState()._setLockboxSlotsFromServer(slots))
+      .catch(() => {});
+  },
+
+  _setLockboxSlotsFromServer: (serverSlots) => set((state) => ({
+    lockboxSlots: serverSlots.map((s) => {
+      const existing = state.lockboxSlots.find((sl) => sl.number === s.slot_no);
+      return {
+        number: s.slot_no as 1 | 2 | 3 | 4 | 5,
+        status: (s.status === 'PICKEDUP' ? 'FULL' : s.status) as LockboxSlot['status'],
+        occupiedSince: existing?.occupiedSince,
+        orderInfo: existing?.orderInfo,
+        isPickupOrder: existing?.isPickupOrder,
+        pickedUp: s.status === 'PICKEDUP' ? true : (existing?.pickedUp ?? false),
+      };
+    }),
+  })),
+
+  _onLockboxOpened: (slotNo) => {
+    get().addLockboxLog({
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      slotNumber: slotNo,
+      action: 'OPENED',
+      result: 'SUCCESS',
+      description: `Slot ${slotNo} opened`,
+    });
   },
 
   // ── Notifications ────────────────────────────────────────────────────────
