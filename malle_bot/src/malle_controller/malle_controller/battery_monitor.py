@@ -3,67 +3,65 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-# sensor_msgs가 설치된 환경에서만 사용
 try:
-    from sensor_msgs.msg import BatteryState as RosBatteryState
-    _HAS_BATTERY_MSG = True
+    from pinkylib import Battery
+    _HAS_PINKYLIB = True
 except ImportError:
-    _HAS_BATTERY_MSG = False
+    _HAS_PINKYLIB = False
 
-_THR_CHARGED  = 0.95
-_THR_LOW      = 0.25
-_THR_CRITICAL = 0.10
+_VOLT_CHARGED  = 8.0
+_VOLT_LOW      = 6.8
+_VOLT_CRITICAL = 6.5
 
 class BatteryMonitor(Node):
 
     def __init__(self):
         super().__init__('battery_monitor')
 
-        self._thr_charged  = self.declare_parameter('thr_charged',  _THR_CHARGED ).value
-        self._thr_low      = self.declare_parameter('thr_low',      _THR_LOW     ).value
-        self._thr_critical = self.declare_parameter('thr_critical',  _THR_CRITICAL).value
-        battery_topic      = self.declare_parameter('battery_topic', '/battery_state').value
+        self._volt_charged  = self.declare_parameter('volt_charged',  _VOLT_CHARGED ).value
+        self._volt_low      = self.declare_parameter('volt_low',      _VOLT_LOW     ).value
+        self._volt_critical = self.declare_parameter('volt_critical',  _VOLT_CRITICAL).value
 
         self._status_pub = self.create_publisher(String, '/malle/battery_status', 10)
 
-        if _HAS_BATTERY_MSG:
-            self._bat_sub = self.create_subscription(
-                RosBatteryState, battery_topic, self._on_battery_state, 10)
-            self.get_logger().info(
-                f'[BatteryMonitor] 구독: {battery_topic}')
+        if _HAS_PINKYLIB:
+            self._battery = Battery()
+            self.create_timer(5.0, self._poll_battery)
+            self.get_logger().info('[BatteryMonitor] pinkylib.Battery 폴링 모드')
         else:
-            self.get_logger().warn(
-                '[BatteryMonitor] sensor_msgs 없음 - 폴링 모드로 전환')
+            self.get_logger().warn('[BatteryMonitor] pinkylib 없음 – 더미 모드 (charged 고정)')
             self.create_timer(5.0, self._poll_battery)
 
-        self._percentage   = 1.0
-        self._power_supply_status = 0   # UNKNOWN
-
-    def _on_battery_state(self, msg):
-        self._percentage = float(msg.percentage)
-        self._power_supply_status = int(msg.power_supply_status)
-        self._evaluate_and_publish()
-
     def _poll_battery(self):
-        # TODO: pinky pro 에서 읽기
-        self._evaluate_and_publish()
+        if not _HAS_PINKYLIB:
+            self._publish('charged')
+            return
 
-    def _evaluate_and_publish(self):
-        p = self._percentage
+        try:
+            voltage = self._battery.get_voltage()
+            percentage = self._battery.battery_percentage()
+        except Exception as e:
+            self.get_logger().warn(f'[BatteryMonitor] 배터리 읽기 실패: {e}')
+            return
 
-        if self._power_supply_status == 1:
-            status = 'charging'
-        elif p >= self._thr_charged:
-            status = 'charged'
-        elif p <= self._thr_critical:
+        if voltage <= self._volt_critical:
             status = 'critical'
-            self.get_logger().error(f'[BatteryMonitor] 임계 배터리: {p:.0%}')
-        elif p <= self._thr_low:
+            self.get_logger().error(
+                f'[BatteryMonitor] 위험 배터리: {percentage}% ({voltage:.2f}V)')
+        elif voltage <= self._volt_low:
             status = 'low'
-            self.get_logger().warn(f'[BatteryMonitor] 저배터리: {p:.0%}')
+            self.get_logger().warn(
+                f'[BatteryMonitor] 저배터리: {percentage}% ({voltage:.2f}V)')
+        elif voltage >= self._volt_charged:
+            status = 'charged'
+            self.get_logger().info(
+                f'[BatteryMonitor] 충전 완료: {percentage}% ({voltage:.2f}V)')
         else:
             status = 'normal'
 
+        self._publish(status)
+
+    def _publish(self, status: str):
         msg = String()
         msg.data = status
         self._status_pub.publish(msg)

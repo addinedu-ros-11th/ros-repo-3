@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +17,12 @@ from app.schemas.session import (
     PinVerifyRequest,
     FollowTagRequest,
 )
+
+class AssignRobotRequest(BaseModel):
+    target_poi_id: int | None = None
 from app.services.session_workflow import (
     create_session_with_assignment,
+    assign_robot_to_session,
     transition_session_status,
     end_session as end_session_workflow,
 )
@@ -132,6 +137,23 @@ async def set_follow_tag(
             "tag_family": req.tag_family,
         })
 
+    return session
+
+
+@router.post("/sessions/{session_id}/assign", response_model=SessionResponse)
+async def assign_robot(
+    session_id: int,
+    req: AssignRobotRequest = AssignRobotRequest(),
+    db: AsyncSession = Depends(get_db),
+):
+    """가용 로봇을 세션에 배정. REQUESTED 상태 또는 재배정 시 사용."""
+    session = await db.get(Session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.status == SessionStatus.ENDED:
+        raise HTTPException(status_code=400, detail="Cannot assign robot to ended session")
+
+    session = await assign_robot_to_session(db, session, target_poi_id=req.target_poi_id)
     return session
 
 
