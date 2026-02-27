@@ -49,4 +49,8 @@
   <!-- ===== battery_monitor ===== -->
   <node pkg="malle_controller" exec="battery_monitor" name="battery_monitor"
         output="screen"/>
+
+  <!-- ===== mission_parking11 ===== -->
+  <node pkg="malle_controller" exec="mission_parking11" name="mission_parking11"
+        output="screen"/>
 </launch>
