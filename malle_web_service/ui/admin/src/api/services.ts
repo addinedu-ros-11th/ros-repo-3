@@ -127,6 +127,19 @@ export const teleopApi = {
     api.post(`/robots/${robotId}/teleop/cmd`, { linear_x, angular_z }),
 };
 
+// --- Lockbox ---
+export interface LockboxSlotRes {
+  slot_no: number;
+  status: string;
+  order_id?: number | null;
+  pickup_poi_id?: number | null;
+  store_name?: string | null;
+}
+
+export const lockboxApi = {
+  getSlots: (robotId: number) => api.get<LockboxSlotRes[]>(`/robots/${robotId}/lockbox/slots`),
+};
+
 // --- Sessions (dashboard view) ---
 export const sessionApi = {
   listActive: () => api.get<{ sessions: Array<{ id: number; user_id: number; session_type: string; status: string; assigned_robot_id: number | null; created_at: string }> }>("/sessions/active"),

@@ -74,7 +74,7 @@ export interface PickupState {
 }
 
 // Lockbox Types
-export type SlotStatus = 'FULL' | 'EMPTY' | 'RESERVED';
+export type SlotStatus = 'FULL' | 'EMPTY' | 'RESERVED' | 'PICKEDUP';
 export type LogAction = 'OPENED' | 'SECURED' | 'FAILED';
 export type LogResult = 'SUCCESS' | 'FAILURE';
 

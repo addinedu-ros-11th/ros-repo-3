@@ -75,7 +75,8 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
       break;
 
     case "SESSION_ENDED":
-      store.endSession();
+      // API 재호출 방지 — 상태만 초기화
+      store._resetOnSessionEnded();
       break;
 
     /* ───── Guide events ───── */
@@ -133,10 +134,33 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
 
     /* ───── Pickup events ───── */
 
-    case "PICKUP_STATUS_CHANGED":
-      // payload: { status, order_id, ... }
-      if (p.status) store.setPickupStatus(p.status as PickupStatus);
+    case "PICKUP_STATUS_CHANGED": {
+      // payload: PickupOrderResponse { id, status, pickup_poi_id, assigned_slot_id, created_channel, ... }
+      const mappedStatus = mapPickupStatus(p.status as string) as PickupStatus;
+      const currentOrder = useAppStore.getState().pickupOrder;
+
+      if (!currentOrder) {
+        // Robot이 생성한 주문 수신 — Mobile에 pickupOrder 새로 생성
+        const appStores = useAppStore.getState().stores;
+        const storeMatch = appStores.find((s) => s.poi_id === (p.pickup_poi_id as number));
+        const storeName = storeMatch?.name ?? `Pickup #${p.id}`;
+        useAppStore.setState({
+          pickupOrder: {
+            orderId: `#${p.id}`,
+            serverOrderId: p.id as number,
+            storeId: String(p.pickup_poi_id ?? ''),
+            storeName,
+            items: [],
+            status: mappedStatus,
+            meetupLocation: null,
+            slotId: (p.assigned_slot_id as number | null) ?? null,
+          },
+        });
+      } else {
+        store.setPickupStatus(mappedStatus);
+      }
       break;
+    }
 
     case "PICKUP_MEET_SET":
       // payload: { meet_poi_name, meet_type }
@@ -197,6 +221,17 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
 
     default:
       console.log("[WS] Unhandled event:", type, payload);
+  }
+}
+
+/* 서버 PickupStatus → 프론트 PickupStatus 변환 */
+function mapPickupStatus(serverStatus: string): string {
+  switch (serverStatus) {
+    case "CREATED":   return "MOVING";
+    case "LOADED":    return "LOADED";
+    case "MEET_SET":  return "MEETUP_SET";
+    case "COMPLETED": return "DONE";
+    default:          return serverStatus;
   }
 }
 

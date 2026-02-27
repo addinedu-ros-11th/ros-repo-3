@@ -138,6 +138,7 @@ async def set_follow_tag(
     }
     if session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STARTED, follow_payload)
+    await manager.send_to_mobile(session_id, WsEvent.FOLLOW_STARTED, follow_payload)
     # dashboard도 follow 시작 알림
     await manager.send_to_dashboard(WsEvent.FOLLOW_STARTED, follow_payload)
 

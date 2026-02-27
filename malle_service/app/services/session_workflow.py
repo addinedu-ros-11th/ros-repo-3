@@ -19,6 +19,7 @@ from app.ws.events import WsEvent
 from app.schemas.session import SessionResponse, SessionAssignedPayload
 from sqlalchemy import select, update
 from app.models.lockbox import LockboxSlot, LockboxSlotStatus
+from app.models.pickup import PickupOrder, PickupStatus
 
 def _generate_pin(length: int = 4) -> str:
     return "".join(random.choices(string.digits, k=length))
@@ -53,6 +54,33 @@ async def assign_robot_to_session(
         session.status = SessionStatus.ASSIGNED
         robot.current_mode = RobotMode.GUIDE
 
+        # 이전 세션의 스테일 데이터 정리
+        # transition_session_status(ENDED) 경로로 종료된 세션은 픽업 주문/슬롯을 정리하지 않으므로
+        # 로봇을 새 세션에 배정할 때 해당 로봇의 미완료 픽업 주문을 CANCELED 처리하고 슬롯을 초기화
+        stale_session_result = await db.execute(
+            select(Session.id).where(
+                Session.assigned_robot_id == robot.id,
+                Session.status != SessionStatus.ENDED,
+                Session.id != session.id,
+            )
+        )
+        stale_session_ids = list(stale_session_result.scalars().all())
+        if stale_session_ids:
+            await db.execute(
+                update(PickupOrder)
+                .where(
+                    PickupOrder.session_id.in_(stale_session_ids),
+                    PickupOrder.status.not_in([PickupStatus.COMPLETED, PickupStatus.CANCELED]),
+                )
+                .values(status=PickupStatus.CANCELED)
+            )
+        # 슬롯은 항상 초기화 (스테일 데이터 유무와 무관하게)
+        await db.execute(
+            update(LockboxSlot)
+            .where(LockboxSlot.robot_id == robot.id)
+            .values(status=LockboxSlotStatus.EMPTY)
+        )
+
         await db.flush()
         await db.refresh(session)
 
@@ -79,6 +107,19 @@ async def assign_robot_to_session(
         await manager.send_to_mobile(session.id, WsEvent.SESSION_ASSIGNED, payload_dict)
         await manager.send_to_robot(robot.id, WsEvent.SESSION_ASSIGNED, payload_dict)
         await manager.send_to_dashboard(WsEvent.SESSION_ASSIGNED, payload_dict)
+
+        # 슬롯 초기화 상태 동기화 (스테일 데이터 정리 후 EMPTY 상태 전파)
+        slot_result = await db.execute(
+            select(LockboxSlot.slot_no)
+            .where(LockboxSlot.robot_id == robot.id)
+            .order_by(LockboxSlot.slot_no)
+        )
+        slot_nos = list(slot_result.scalars().all())
+        empty_slots = [{"slot_no": sno, "status": "EMPTY"} for sno in (slot_nos or range(1, 6))]
+        lockbox_payload = {"robot_id": robot.id, "slots": empty_slots}
+        await manager.send_to_mobile(session.id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_robot(robot.id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, lockbox_payload)
 
     return session
 
@@ -155,6 +196,21 @@ async def transition_session_status(
         )
 
     elif new_status == SessionStatus.ENDED:
+        # 미완료 픽업 주문 CANCELED 처리 + 슬롯 초기화 (end_session과 동일하게)
+        await db.execute(
+            update(PickupOrder)
+            .where(
+                PickupOrder.session_id == session.id,
+                PickupOrder.status.not_in([PickupStatus.COMPLETED, PickupStatus.CANCELED]),
+            )
+            .values(status=PickupStatus.CANCELED)
+        )
+        if session.assigned_robot_id:
+            await db.execute(
+                update(LockboxSlot)
+                .where(LockboxSlot.robot_id == session.assigned_robot_id)
+                .values(status=LockboxSlotStatus.EMPTY)
+            )
         await manager.broadcast_to_session(
             session.id, session.assigned_robot_id,
             WsEvent.SESSION_ENDED, {"session_id": session.id, "reason": "status_update"},
@@ -173,6 +229,16 @@ async def end_session(db: AsyncSession, session: Session, reason: str = "user_en
     session.status = SessionStatus.ENDED
     session.ended_at = datetime.now(timezone.utc)
 
+    # 미완료 픽업 주문 CANCELED 처리
+    await db.execute(
+        update(PickupOrder)
+        .where(
+            PickupOrder.session_id == session.id,
+            PickupOrder.status.not_in([PickupStatus.COMPLETED, PickupStatus.CANCELED])
+        )
+        .values(status=PickupStatus.CANCELED)
+    )
+    
     robot_id = session.assigned_robot_id
     if robot_id:
         robot = await db.get(Robot, robot_id)
@@ -194,10 +260,21 @@ async def end_session(db: AsyncSession, session: Session, reason: str = "user_en
     )
 
     if robot_id:
-        empty_slots = [{"slot_no": i, "status": "EMPTY"} for i in range(1, 6)]
+        # 실제 DB 슬롯 번호 조회 (bulk UPDATE 후 slot_no는 변경 없으므로 안전)
+        slot_result = await db.execute(
+            select(LockboxSlot.slot_no)
+            .where(LockboxSlot.robot_id == robot_id)
+            .order_by(LockboxSlot.slot_no)
+        )
+        slot_nos = list(slot_result.scalars().all())
+        empty_slots = [{"slot_no": sno, "status": "EMPTY"} for sno in (slot_nos or range(1, 6))]
+        lockbox_payload = {"robot_id": robot_id, "slots": empty_slots}
+        # mobile + robot에 전송
         await manager.broadcast_to_session(
             session.id, robot_id,
-            WsEvent.LOCKBOX_UPDATED, {"robot_id": robot_id, "slots": empty_slots},
+            WsEvent.LOCKBOX_UPDATED, lockbox_payload,
         )
+        # dashboard에도 전송 (broadcast_to_session은 dashboard 미포함)
+        await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, lockbox_payload)
 
     return session

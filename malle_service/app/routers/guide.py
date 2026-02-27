@@ -172,6 +172,7 @@ async def update_guide_item_status(
 
     # Always send updated queue
     queue = await _get_queue(db, session_id)
+    await manager.send_to_mobile(session_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
     if session and session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
 

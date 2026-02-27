@@ -19,15 +19,20 @@ import type {
   VoiceIntentResult,
 } from '@/types/robot';
 import { parseVoiceCommand, resolveStoreName } from '@/lib/voiceParser';
-import { stores, getProductsByStore } from '@/data/stores';
 import { sessionApi } from '@/api/sessions';
 import { guideApi } from '@/api/guide';
-import { pickupApi, lockboxApi, type LockboxSlotRes } from '@/api/services';
+import { pickupApi, lockboxApi, storeApi, type LockboxSlotRes, type StoreRes } from '@/api/services';
 
 interface RobotStore {
   // ★ Server IDs
   currentSessionId: number | null;
   currentRobotId: number | null;
+
+  // store name → pois.id 매핑 (서버 /stores에서 로드, pickup_poi_id 사용)
+  storePoiMap: Record<string, number>;
+  // 서버에서 로드한 전체 매장 목록 (PickupPage, SearchPage에서 사용)
+  storeList: StoreRes[];
+  initStoresFromServer: () => Promise<void>;
 
   // Robot State
   sessionState: SessionState;
@@ -99,6 +104,7 @@ interface RobotStore {
   openSlot: (slotNumber: number) => void;
   updateSlotStatus: (slotNumber: number, status: LockboxSlot['status']) => void;
   initLockboxSlots: () => void;
+  _resetOnSessionEnded: () => void;
   _setLockboxSlotsFromServer: (slots: LockboxSlotRes[]) => void;
   _onLockboxOpened: (slotNo: number) => void;
 
@@ -155,6 +161,8 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   // ★ Server IDs
   currentSessionId: null,
   currentRobotId: null,
+  storePoiMap: {},
+  storeList: [],
 
   // Initial State
   sessionState: 'INACTIVE',
@@ -174,6 +182,19 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   showPinOverlay: false,
   pendingLockboxSlot: null,
   pendingPickupStore: null,
+
+  // ── Server Store Init ────────────────────────────────────────────────────
+
+  initStoresFromServer: async () => {
+    try {
+      const serverStores = await storeApi.list();
+      const map: Record<string, number> = {};
+      for (const s of serverStores) {
+        if (s.name && s.poi_id) map[s.name] = s.poi_id;
+      }
+      set({ storePoiMap: map, storeList: serverStores });
+    } catch { /* 로컬 데이터로 fallback */ }
+  },
 
   // ── Session ──────────────────────────────────────────────────────────────
 
@@ -383,11 +404,15 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     }));
 
     if (state.currentSessionId) {
-      pickupApi.create(state.currentSessionId, {
-        pickup_poi_id: 1, // TODO: store → poi_id 매핑
-        created_channel: 'ROBOT',
-        items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
-      }).catch(() => {});
+      // storePoiMap: 서버 /stores에서 로드한 store name → pois.id 매핑
+      const pickup_poi_id = state.storePoiMap[order.storeName];
+      if (pickup_poi_id) {
+        pickupApi.create(state.currentSessionId, {
+          pickup_poi_id,
+          created_channel: 'ROBOT',
+          items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
+        }).catch(() => {});
+      }
     }
   },
 
@@ -398,18 +423,10 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   })),
 
   completePickup: () => {
-    const state = get();
-    if (!state.pickup.currentOrder) return;
-    const slotNumber = state.pickup.currentOrder.slotId;
     set((state) => ({
       activeMode: null,
       robot: { ...state.robot, status: 'IDLE' },
       pickup: { currentOrder: null, showLoadingOverlay: false },
-      lockboxSlots: state.lockboxSlots.map((slot) =>
-        slot.number === slotNumber
-          ? { ...slot, status: 'FULL' as const, isPickupOrder: true, pickedUp: true, occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-          : slot
-      ),
     }));
   },
 
@@ -465,23 +482,51 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     const robotId = state.currentRobotId ?? Number(state.robot.id);
     if (!robotId) return;
 
-    // 🔥 1. 먼저 완전 초기화
+    // 1. 먼저 완전 초기화
     set({
       lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
       lockboxLogs: [],
     });
 
+    // 2. 서버에서 실제 슬롯 상태 조회
+    lockboxApi.getSlots(robotId)
+      .then((slots) => useRobotStore.getState()._setLockboxSlotsFromServer(slots))
+      .catch(() => {});
+  },
+
+  // WS SESSION_ENDED 수신 시 사용 — API 재호출 없이 상태만 초기화
+  _resetOnSessionEnded: () => {
+    set({
+      sessionState: 'INACTIVE',
+      session: null,
+      activeMode: null,
+      sessionTime: 0,
+      guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
+      follow: { active: false, tagNumber: null, status: 'STOPPED' },
+      pickup: { currentOrder: null, showLoadingOverlay: false },
+      currentSessionId: null,
+      lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
+      lockboxLogs: [],
+    });
   },
 
   _setLockboxSlotsFromServer: (serverSlots) => set((state) => ({
     lockboxSlots: serverSlots.map((s) => {
       const existing = state.lockboxSlots.find((sl) => sl.number === s.slot_no);
+      let newOrderInfo = existing?.orderInfo;
+      if (s.order_id != null) {
+        newOrderInfo = {
+          orderId: `#${s.order_id}`,
+          storeName: s.store_name ?? existing?.orderInfo?.storeName ?? '',
+          customerName: existing?.orderInfo?.customerName ?? '',
+        };
+      }
       return {
         number: s.slot_no as 1 | 2 | 3 | 4 | 5,
-        status: (s.status === 'PICKEDUP' ? 'FULL' : s.status) as LockboxSlot['status'],
+        status: s.status as LockboxSlot['status'],
         occupiedSince: existing?.occupiedSince,
-        orderInfo: existing?.orderInfo,
-        isPickupOrder: existing?.isPickupOrder,
+        orderInfo: newOrderInfo,
+        isPickupOrder: s.order_id != null ? true : (existing?.isPickupOrder ?? false),
         pickedUp: s.status === 'PICKEDUP' ? true : (existing?.pickedUp ?? false),
       };
     }),
