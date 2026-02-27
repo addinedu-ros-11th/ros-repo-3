@@ -70,7 +70,7 @@ except ImportError:
 try:
     import cv2
     import numpy as np
-    from malle_controller.camera import Camera as PinkyCamera
+    from malle_bot.src.malle_controller.malle_controller.camera import Camera as PinkyCamera
     HAS_CAMERA = True
     print("[bridge_node] Camera: camera.py loaded")
 except ImportError as e:
