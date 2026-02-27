@@ -18,6 +18,7 @@ mission_executor.py — HTTP 기반 미션 디스패처
 """
 
 import threading
+from enum import Enum, auto
 
 import rclpy
 from rclpy.node import Node
@@ -28,6 +29,17 @@ from malle_controller.poi_manager import PoiManager
 from malle_controller.mission_guide import GuideExecutor
 
 
+class RobotState(Enum):
+    CHARGING  = auto()
+    IDLE      = auto()
+    GUIDE     = auto()
+    FOLLOW    = auto()
+    ERRAND    = auto()
+    BOX_EMPTY = auto()
+    BOX_FULL  = auto()
+    EXCEPTION = auto()
+
+
 class MissionExecutor(Node, NavCore):
     """
     미션 디스패처 노드.
@@ -35,20 +47,22 @@ class MissionExecutor(Node, NavCore):
     단독 실행 시 ROS2 토픽으로도 트리거 가능.
     """
 
-    def __init__(self, api_base_url: str = 'http://localhost:8000/api/v1'):
+    def __init__(self, api_base_url: str = 'http://localhost:8000'):
         Node.__init__(self, 'mission_executor')
         self.nav_core_init(self)
+
+        self.state = RobotState.IDLE
 
         self._api     = ApiClient(base_url=api_base_url, logger=self.get_logger())
         self._poi_mgr = PoiManager(self._api, logger=self.get_logger())
         self._poi_mgr.load()
 
-        self._guide    = GuideExecutor(self, self._api, self._poi_mgr)
+        self._guide  = GuideExecutor(self, self._api, self._poi_mgr)
         # TODO: self._follow  = FollowExecutor(...)
         # TODO: self._pickup  = PickupExecutor(...)
 
         self._lock = threading.Lock()
-        self.get_logger().info('[MissionExecutor] 준비 완료')
+        self.get_logger().info(f'[MissionExecutor] 준비 완료 (상태: {self.state.name})')
 
     # ── 외부 인터페이스 (bridge_node에서 직접 호출) ──────────────────────────
 
@@ -59,15 +73,13 @@ class MissionExecutor(Node, NavCore):
 
         Parameters
         ----------
-        session_id   : 세션 ID
-        queue_items  : 이미 조회된 queue item 목록 (없으면 서버에서 재조회)
+        session_id  : 세션 ID
+        queue_items : 이미 조회된 queue item 목록 (없으면 서버에서 재조회)
         """
         with self._lock:
-            # 진행 중인 미션 중지
             if self._guide.is_active:
                 self._guide.stop()
 
-        # queue_items가 없으면 서버에서 조회
         if queue_items is None:
             try:
                 items = self._api.get_guide_queue(session_id)
@@ -87,12 +99,24 @@ class MissionExecutor(Node, NavCore):
             )
             return
 
+        self._transition(RobotState.GUIDE)
         self._guide.start(session_id, queue_items)
 
     def stop_all(self):
         """모든 실행 중인 미션 중지 (E-Stop / 세션 종료 시)."""
         self._guide.stop()
+        self._transition(RobotState.IDLE)
         self.get_logger().info('[MissionExecutor] 전체 미션 중지')
+
+    # ── 상태 관리 ────────────────────────────────────────────────────────────
+
+    def _transition(self, new_state: RobotState):
+        self.get_logger().info(
+            f'[MissionExecutor] {self.state.name} → {new_state.name}'
+        )
+        self.state = new_state
+
+    # ── 프로퍼티 ─────────────────────────────────────────────────────────────
 
     @property
     def guide_active(self) -> bool:

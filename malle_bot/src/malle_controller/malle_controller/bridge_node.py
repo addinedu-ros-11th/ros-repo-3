@@ -88,6 +88,7 @@ try:
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
+
     print("[bridge_node] WARNING: FastAPI not available.")
 
 
