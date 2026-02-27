@@ -2,10 +2,23 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String, Float32
 from enum import Enum, auto
 
 from malle_controller.msg import TaskCommand, RobotMessage, MessageHeader
+
+try:
+    import cv2
+    import threading
+    import time
+    from pinkylib import Camera
+    from malle_controller.mission_follow import MissionFollowNode
+    from malle_controller.tag_tracker import TagTrackerNode
+    from malle_controller.mission_parking11 import PinkyParkingNode
+    _CAMERA_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    _CAMERA_AVAILABLE = False
 
 
 class RobotState(Enum):
@@ -146,14 +159,62 @@ class MissionExecutor(Node):
 
 def main():
     rclpy.init()
-    node = MissionExecutor()
+    executor = MultiThreadedExecutor()
+    nodes = [MissionExecutor()]
+
+    camera = None
+
+    if _CAMERA_AVAILABLE:
+        # == 카메라 초기화 (단일 소유) ====================
+        try:
+            cam = Camera()
+            cam.start(width=640, height=480)
+            camera = cam
+
+            _latest_gray = None
+            _frame_lock = threading.Lock()
+
+            def _capture():
+                nonlocal _latest_gray
+                while True:
+                    frame = cam.get_frame()
+                    if frame is not None:
+                        with _frame_lock:
+                            _latest_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+                    time.sleep(0.01)
+
+            def get_gray_frame():
+                with _frame_lock:
+                    return _latest_gray
+
+            threading.Thread(target=_capture, daemon=True).start()
+
+            nodes += [
+                MissionFollowNode(get_gray_frame),
+                TagTrackerNode(get_gray_frame),
+                PinkyParkingNode(get_gray_frame),
+            ]
+        except Exception as e:
+            rclpy.logging.get_logger('mission_executor').warn(
+                f'카메라 초기화 실패 - 카메라 노드 비활성화: {e}')
+            camera = None
+    else:
+        rclpy.logging.get_logger('mission_executor').warn(
+            'pinkylib 없음 - 카메라 노드 비활성화')
+
+    for node in nodes:
+        executor.add_node(node)
+
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        for node in nodes:
+            node.destroy_node()
         rclpy.shutdown()
+        if camera is not None:
+            camera.close()
 
 
 if __name__ == '__main__':
