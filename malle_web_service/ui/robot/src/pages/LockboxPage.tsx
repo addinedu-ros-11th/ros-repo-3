@@ -3,13 +3,18 @@ import { useState, useEffect } from 'react';
 import type { LockboxSlot } from '@/types/robot';
 
 export function LockboxPage() {
-  const { lockboxSlots, lockboxLogs, openSlot, setSlotStatus, addLockboxLog, pendingLockboxSlot, setPendingLockboxSlot } = useRobotStore();
+  const { lockboxSlots, lockboxLogs, openSlot, updateSlotStatus, addLockboxLog, pendingLockboxSlot, setPendingLockboxSlot, initLockboxSlots } = useRobotStore();
   const [selectedSlot, setSelectedSlot] = useState<LockboxSlot | null>(null);
   const [showOpenDialog, setShowOpenDialog] = useState(false);
   const [showTokenDialog, setShowTokenDialog] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [token, setToken] = useState('');
   const [tokenError, setTokenError] = useState(false);
+
+  // 마운트 시 서버에서 실제 슬롯 상태 로드
+  // useEffect(() => {
+  //   initLockboxSlots();
+  // }, []);
 
   // Check for pending lockbox slot from voice command
   useEffect(() => {
@@ -65,7 +70,7 @@ export function LockboxPage() {
   const handleConfirmStorage = (stored: boolean) => {
     if (selectedSlot) {
       if (stored) {
-        setSlotStatus(selectedSlot.number, 'FULL');
+        updateSlotStatus(selectedSlot.number, 'FULL');
         addLockboxLog({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           slotNumber: selectedSlot.number,
@@ -74,7 +79,7 @@ export function LockboxPage() {
           description: `Slot ${selectedSlot.number} secured with items`,
         });
       } else {
-        setSlotStatus(selectedSlot.number, 'EMPTY');
+        updateSlotStatus(selectedSlot.number, 'EMPTY');
         addLockboxLog({
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           slotNumber: selectedSlot.number,

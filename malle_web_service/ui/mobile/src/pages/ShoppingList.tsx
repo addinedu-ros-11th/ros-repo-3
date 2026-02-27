@@ -28,16 +28,30 @@ export default function ShoppingList() {
   const storeCount = Object.keys(groupedProducts).length;
 
   const handleOptimizeRoute = () => {
+    const storesToAdd: typeof pois = [];
+    
     Object.keys(groupedProducts).forEach(storeId => {
       const hasIncomplete = groupedProducts[storeId].some(p => !p.completed);
       if (hasIncomplete) {
-        const poi = pois.find(p => p.id === storeId);
-        if (poi) {
-          addToGuideQueue(poi);
+        // storeId (string)를 number로 변환하여 stores 찾기
+        const store = stores.find(s => s.slug === storeId || String(s.id) === storeId);
+        if (store && store.poi_id) {
+          // store.poi_id로 pois 찾기
+          const poi = pois.find(p => p.id === store.poi_id);
+          if (poi) {
+            storesToAdd.push(poi);
+            addToGuideQueue(poi);
+          }
         }
       }
     });
-    navigate('/mode/guide');
+    
+    if (storesToAdd.length > 0) {
+      toast.success(`${storesToAdd.length}개 스토어를 Guide queue에 추가했습니다`, { duration: 1500 });
+      navigate('/mode/guide');
+    } else {
+      toast.error('추가할 미완료 항목이 없습니다', { duration: 1500 });
+    }
   };
 
   const handleSelectStore = (storeId: string) => {
@@ -53,7 +67,7 @@ export default function ShoppingList() {
       option: product.option,
       price: product.price,
     });
-    toast.success(`${product.name} added`);
+    toast.success(`${product.name} added`, { duration: 1500 });
     setShowAddForm(false);
     setAddStep('store');
     setSelectedStoreId(null);
@@ -61,7 +75,7 @@ export default function ShoppingList() {
 
   const handleDelete = (id: string, name: string) => {
     removeFromShoppingList(id);
-    toast.success(`${name} removed`);
+    toast.success(`${name} removed`, { duration: 1500 });
   };
 
   const handleItemClick = (product: typeof shoppingList[0]) => {
@@ -71,10 +85,11 @@ export default function ShoppingList() {
 
   const handleGuideAction = () => {
     if (!actionItem) return;
-    const poi = pois.find(p => p.id === actionItem.storeId);
+    const store = stores.find(s => s.slug === actionItem.storeId || String(s.id) === actionItem.storeId);
+    const poi = store ? pois.find(p => p.id === store.poi_id) : undefined;
     if (poi) {
       addToGuideQueue(poi);
-      toast.success(`${poi.name} added to Guide queue`);
+      toast.success(`${poi.name} added to Guide queue`, { duration: 1500 });
       navigate('/mode/guide');
     }
     setActionItem(null);
@@ -178,7 +193,7 @@ export default function ShoppingList() {
       {/* Store Groups */}
       <div className="space-y-4">
         {Object.entries(groupedProducts).map(([storeId, products]) => {
-          const store = stores.find(s => s.id === storeId);
+          const store = stores.find(s => s.slug === storeId || s.id === storeId);
           if (!store) return null;
 
           const completedCount = products.filter(p => p.completed).length;
@@ -259,7 +274,7 @@ export default function ShoppingList() {
             <div className="w-10 h-1 bg-muted-foreground/30 rounded-full mx-auto mb-2" />
             <h3 className="font-bold text-foreground text-center">{actionItem.name}</h3>
             <p className="text-xs text-muted-foreground text-center mb-2">
-              {stores.find(s => s.id === actionItem.storeId)?.name}
+              {stores.find(s => s.slug === actionItem.storeId || s.id === actionItem.storeId)?.name}
             </p>
 
             <button

@@ -78,11 +78,11 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
     case "SESSION_ACTIVE": {
       // payload: { id, session_type, remaining_time, customer_name, ... }
       const sessionType = p.session_type || "TIME";
-      // ?? has lower precedence than ?: so must wrap explicitly
       const remaining = p.remaining_time ?? (p.requested_minutes ? p.requested_minutes * 60 : 7200);
       const customerName = p.customer_name || "Customer";
       store.startSession(sessionType, remaining, customerName);
       useRobotStore.setState({ currentSessionId: p.id ?? useRobotStore.getState().currentSessionId });
+      store.initLockboxSlots();
       break;
     }
 
@@ -100,7 +100,9 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
     case "GUIDE_QUEUE_UPDATED": {
       // payload: { queue: GuideQueueItemRes[] }
       const queue: GuideQueueItem[] = (p.queue || []).map((item: any) => ({
-        id: String(item.id),
+        id: String(item.id),             // 서버 item id를 UI id로도 사용 (일관성)
+        serverItemId: item.id as number, // DELETE/PATCH용 숫자 id
+        poiId: String(item.poi_id),
         poiName: item.poi_name || `POI #${item.poi_id}`,
         floor: "Level 1",
         estimatedTime: item.estimated_time ?? 3,
@@ -115,7 +117,6 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
       // payload: { item_id, poi_id, poi_name }
       const itemId = String(p.item_id);
       store.setGuideItemStatus(itemId, "IN_PROGRESS");
-      // 가이드가 실행 중이 아니면 시작
       if (!useRobotStore.getState().guide.isExecuting) {
         useRobotStore.setState((s) => ({
           activeMode: "GUIDE",
@@ -171,9 +172,7 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
       const status = p.status as PickupStatus;
       if (status) {
         store.setPickupStatus(status);
-        // LOADED → 로딩 오버레이 표시
         if (status === "LOADED") store.setShowLoadingOverlay(true);
-        // DONE → 완료 처리
         if (status === "DONE") store.completePickup();
       }
       store.addNotification({
@@ -198,37 +197,29 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
     /* ───── Lockbox events ───── */
 
     case "LOCKBOX_OPENED":
+      // API 재호출 없이 로그만 기록 (openSlot()을 호출하면 API 무한루프 발생)
       if (p.slot_no) {
-        store.openSlot(p.slot_no);
+        store._onLockboxOpened(p.slot_no);
         store.addNotification({
           category: "LOCKBOX",
           title: `Slot ${p.slot_no} Opened`,
-          description: "Lockbox slot opened remotely",
+          description: "Lockbox slot opened",
         });
       }
       break;
 
     case "LOCKBOX_UPDATED": {
-      // payload: { slots: [{ slot_no, status, size_label }] }
-      // 서버에서 전체 슬롯 상태를 다시 내려주면 robotStore 전체 갱신
+      // payload: { slots: SlotResponse[] }
       const updatedSlots = (p.slots as any[]) ?? [];
       if (updatedSlots.length) {
-        const mapped = updatedSlots.map((s: any) => ({
-          number: s.slot_no as number,
-          status: (s.status === "FULL" ? "FULL"
-                 : s.status === "RESERVED" ? "RESERVED"
-                 : s.status === "PICKEDUP" ? "FULL"
-                 : "EMPTY") as "EMPTY" | "FULL" | "RESERVED",
-          size: s.size_label ?? undefined,
-        }));
-        useRobotStore.setState({ lockboxSlots: mapped });
+        store._setLockboxSlotsFromServer(updatedSlots);
       }
       break;
     }
 
     case "LOCKBOX_STORED":
+      // 상태는 LOCKBOX_UPDATED로 처리; 여기선 로그만 추가
       if (p.slot_no) {
-        store.setSlotStatus(p.slot_no, "FULL");
         store.addLockboxLog({
           timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           slotNumber: p.slot_no,
