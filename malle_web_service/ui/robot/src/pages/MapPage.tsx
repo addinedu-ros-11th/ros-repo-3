@@ -27,6 +27,7 @@ export function MapPage() {
 
   const handleAddToGuide = (store: typeof stores[0]) => {
     addToGuideQueue({
+      poiId: store.id,
       poiName: store.name,
       floor: store.location,
       estimatedTime: Math.floor(Math.random() * 5) + 2,

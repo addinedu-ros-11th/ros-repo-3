@@ -288,7 +288,7 @@ export default function PickupMode() {
               <h3 className="font-bold text-foreground text-center">Choose a Meet-up Point</h3>
               <p className="text-xs text-muted-foreground text-center mb-2">Select where you'd like to meet the robot</p>
               <div className="space-y-2 max-h-72 overflow-y-auto">
-                {pois.map((poi) => (
+                {pois.filter(p => p.id > 9).map((poi) => (
                   <button
                     key={poi.id}
                     onClick={() => {

@@ -23,22 +23,28 @@ const queryClient = new QueryClient();
 // Falls back to '1' for dev convenience.
 const ROBOT_ID = import.meta.env.VITE_ROBOT_ID ?? "1";
 
-/** WS 연결 + 서버에서 로봇 초기 상태 fetch */
+// 앱 시작 전 store를 즉시 초기화 (useEffect 딜레이 없이)
+// → useWsHandler가 처음부터 올바른 robotId로 WS 연결
+useRobotStore.setState((s) => ({
+  robot: { ...s.robot, id: ROBOT_ID, name: `Mall·E-${ROBOT_ID}` },
+  currentRobotId: Number(ROBOT_ID),
+}));
+
+/** WS 연결 컴포넌트 */
 function RobotInit() {
   const robotId = useRobotStore((s) => s.robot.id);
 
-  useEffect(() => {
-    // 앱 시작 시 store에 실제 robot ID 세팅 (env에서 읽은 값)
-    if (robotId !== ROBOT_ID) {
-      useRobotStore.setState((s) => ({
-        robot: { ...s.robot, id: ROBOT_ID, name: `Mall·E-${ROBOT_ID}` },
-        currentRobotId: Number(ROBOT_ID),
-      }));
-    }
-  }, []);
+  const initLockboxSlots = useRobotStore((s) => s.initLockboxSlots);
 
   // 로봇은 항상 WS 연결 (robotId는 고정)
   useWsHandler(robotId);
+
+    // 세션 시작 시 lockbox 초기화
+  useEffect(() => {
+    if (robotId) {
+      initLockboxSlots();
+    }
+  }, [robotId]);
 
   return null;
 }

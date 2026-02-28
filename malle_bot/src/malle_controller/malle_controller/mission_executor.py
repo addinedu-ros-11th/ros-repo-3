@@ -1,12 +1,31 @@
 #!/usr/bin/env python3
+"""
+mission_executor.py — HTTP 기반 미션 디스패처
+
+역할:
+  - bridge_node의 /bridge/navigate 요청을 받아 GuideExecutor 실행
+  - 향후 follow / pickup 실행기도 여기서 분기
+  - 세션 상태 변화(E-Stop, 세션 종료)에 따른 실행기 중지
+
+아키텍처:
+  bridge_node(:9100)
+    └─ POST /bridge/navigate → MissionExecutor.dispatch_guide()
+                                     └─ GuideExecutor.start()
+                                           └─ NavCore.navigate_to_pose()
+                                                 └─ Nav2 NavigateToPose action
+                                                       └─ 도착 콜백
+                                                             └─ ApiClient.update_guide_item(ARRIVED)
+"""
+
+import threading
+from enum import Enum, auto
 
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String, Float32
-from enum import Enum, auto
 
-from malle_controller.msg import TaskCommand, RobotMessage, MessageHeader
+from malle_controller.msg import TaskCommand, RobotMessage
 
 try:
     import cv2
@@ -37,7 +56,7 @@ class MissionExecutor(Node):
     def __init__(self):
         super().__init__('mission_executor')
 
-        self.state           = RobotState.IDLE
+        self.state           = RobotState.CHARGING
         self.robot_id        = 'malle_01'
         self.battery         = 0.0
         self.current_task_id = ''
@@ -120,15 +139,17 @@ class MissionExecutor(Node):
         else:
             self.get_logger().warn(f"처리되지 않은 result: '{result}' (state: {self.state.name})")
 
-    def _on_battery_pct(self, msg: Float32):
-        self.battery = msg.data
+    def stop_all(self):
+        """모든 실행 중인 미션 중지 (E-Stop / 세션 종료 시)."""
+        self._transition(RobotState.IDLE)
+        self.get_logger().info('[MissionExecutor] 전체 미션 중지')
 
-    def _on_battery(self, msg: String):
-        if msg.data.strip().lower() == 'charged' and self.state == RobotState.CHARGING:
-            self._transition(RobotState.IDLE)
+    # ── 상태 관리 ────────────────────────────────────────────────────────────
 
     def _transition(self, new_state: RobotState):
-        self.get_logger().info(f"[TRANSITION] {self.state.name} → {new_state.name}")
+        self.get_logger().info(
+            f'[MissionExecutor] {self.state.name} → {new_state.name}'
+        )
         self.state = new_state
 
         trigger = {

@@ -46,6 +46,9 @@ export const lockboxApi = {
   openSlot: (robotId: number, slotNo: number) =>
     api.post(`/robots/${robotId}/lockbox/${slotNo}/open`),
 
+  updateSlotStatus: (robotId: number, slotNo: number, status: string) =>
+    api.patch<LockboxSlotRes>(`/robots/${robotId}/lockbox/${slotNo}/status`, { status }),
+
   createToken: (robotId: number, sessionId: number, slotId?: number) =>
     api.post<{ token: string; expires_at: string }>(`/robots/${robotId}/lockbox/tokens`, {
       session_id: sessionId,

@@ -19,6 +19,8 @@ interface DashboardWsCallbacks {
   onGuideArrived: (data: Record<string, unknown>) => void;
   onPickupStatusChanged: (data: Record<string, unknown>) => void;
   onLockboxOpened: (data: Record<string, unknown>) => void;
+  onFollowStarted: (data: Record<string, unknown>) => void;
+  onFollowStopped: (data: Record<string, unknown>) => void;
 }
 
 export function useWsHandler(callbacks: DashboardWsCallbacks) {
@@ -75,6 +77,28 @@ function handleWsMessage(msg: WsMessage, cb: DashboardWsCallbacks) {
       cb.onSessionAssigned(p);
       break;
 
+    case "ROBOT_APPROACHING":
+      cb.onEventReceived({
+        type: "ROBOT_APPROACHING",
+        severity: "INFO",
+        robot_id: p.robot_id,
+        session_id: p.session_id,
+        message: `Robot R-${p.robot_id} approaching for session S-${p.session_id}`,
+        created_at: new Date().toISOString(),
+      });
+      break;
+
+    case "SESSION_ACTIVE":
+      cb.onEventReceived({
+        type: "SESSION_ACTIVE",
+        severity: "INFO",
+        robot_id: p.assigned_robot_id,
+        session_id: p.id,
+        message: `Session S-${p.id} is now active`,
+        created_at: new Date().toISOString(),
+      });
+      break;
+
     case "SESSION_ENDED":
       // 세션 종료 → 이벤트로 기록
       cb.onEventReceived({
@@ -105,16 +129,59 @@ function handleWsMessage(msg: WsMessage, cb: DashboardWsCallbacks) {
       });
       break;
 
+    /* ───── Follow ───── */
+
+    case "FOLLOW_STARTED":
+      cb.onFollowStarted(p);
+      break;
+
+    case "FOLLOW_STOPPED":
+      cb.onFollowStopped(p);
+      break;
+
     /* ───── Pickup ───── */
 
     case "PICKUP_STATUS_CHANGED":
       cb.onPickupStatusChanged(p);
       break;
 
+    case "PICKUP_MEET_SET":
+      cb.onEventReceived({
+        type: "PICKUP_MEET_SET",
+        severity: "INFO",
+        robot_id: p.robot_id,
+        session_id: p.session_id,
+        message: `Pickup meet point set for session S-${p.session_id}`,
+        created_at: new Date().toISOString(),
+      });
+      break;
+
     /* ───── Lockbox ───── */
 
     case "LOCKBOX_OPENED":
       cb.onLockboxOpened(p);
+      break;
+
+    case "LOCKBOX_STORED":
+      cb.onEventReceived({
+        type: "LOCKBOX_STORED",
+        severity: "INFO",
+        robot_id: p.robot_id,
+        session_id: p.session_id,
+        message: `Lockbox slot ${p.slot ?? ""} stored`,
+        created_at: new Date().toISOString(),
+      });
+      break;
+
+    case "LOCKBOX_UPDATED":
+      cb.onEventReceived({
+        type: "LOCKBOX_UPDATED",
+        severity: "INFO",
+        robot_id: p.robot_id,
+        session_id: p.session_id,
+        message: `Lockbox updated`,
+        created_at: new Date().toISOString(),
+      });
       break;
 
     case "PONG":

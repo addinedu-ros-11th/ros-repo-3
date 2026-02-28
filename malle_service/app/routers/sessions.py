@@ -130,12 +130,16 @@ async def set_follow_tag(
     await db.flush()
     await db.refresh(session)
 
+    follow_payload = {
+        "session_id": session_id,
+        "tag_code": req.tag_code,
+        "tag_family": req.tag_family,
+        "robot_id": session.assigned_robot_id,
+    }
     if session.assigned_robot_id:
-        await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STARTED, {
-            "session_id": session_id,
-            "tag_code": req.tag_code,
-            "tag_family": req.tag_family,
-        })
+        await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STARTED, follow_payload)
+    # dashboard도 follow 시작 알림
+    await manager.send_to_dashboard(WsEvent.FOLLOW_STARTED, follow_payload)
 
     return session
 

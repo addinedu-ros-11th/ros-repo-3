@@ -14,6 +14,7 @@ from app.models.lockbox import (
     LockboxSlot, LockboxSlotStatus, LockboxOpenLog, LockboxOpenResult,
     LockboxActor, LockboxToken,
 )
+from app.models.session import Session, SessionStatus
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 
@@ -52,11 +53,26 @@ class TokenVerifyRequest(BaseModel):
     session_id: int
 
 
+class SlotStatusUpdateRequest(BaseModel):
+    status: LockboxSlotStatus
+
+
 async def _get_slots(db: AsyncSession, robot_id: int) -> list[dict]:
     result = await db.execute(
         select(LockboxSlot).where(LockboxSlot.robot_id == robot_id).order_by(LockboxSlot.slot_no)
     )
     return [SlotResponse.model_validate(s).model_dump(mode="json") for s in result.scalars().all()]
+
+
+async def _get_active_session_id(db: AsyncSession, robot_id: int) -> int | None:
+    """활성 세션 id 조회 (mobile WS 브로드캐스트용)."""
+    result = await db.execute(
+        select(Session.id).where(
+            Session.assigned_robot_id == robot_id,
+            Session.status != SessionStatus.ENDED,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 @router.get("/robots/{robot_id}/lockbox", response_model=list[SlotResponse])
@@ -87,7 +103,6 @@ async def open_slot(
     if not slot:
         raise HTTPException(status_code=404, detail="Slot not found")
 
-    # Log the open
     log = LockboxOpenLog(
         robot_id=robot_id,
         slot_id=slot.id,
@@ -98,16 +113,61 @@ async def open_slot(
     db.add(log)
     await db.flush()
 
-    # WS
     slots = await _get_slots(db, robot_id)
+    session_id = await _get_active_session_id(db, robot_id)
+
     await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_OPENED, {
         "slot_no": slot_no, "actor": actor.value,
     })
+    if session_id:
+        await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_OPENED, {
+            "slot_no": slot_no, "actor": actor.value,
+        })
     await manager.send_to_dashboard(WsEvent.LOCKBOX_OPENED, {
         "robot_id": robot_id, "slot_no": slot_no, "actor": actor.value,
     })
+    await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+    if session_id:
+        await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+    await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, {"robot_id": robot_id, "slots": slots})
 
     return {"ok": True, "slot_no": slot_no}
+
+
+@router.patch("/robots/{robot_id}/lockbox/{slot_no}/status", response_model=SlotResponse)
+async def update_slot_status(
+    robot_id: int,
+    slot_no: int,
+    req: SlotStatusUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update lockbox slot status and broadcast to all clients."""
+    result = await db.execute(
+        select(LockboxSlot).where(
+            LockboxSlot.robot_id == robot_id,
+            LockboxSlot.slot_no == slot_no,
+        )
+    )
+    slot = result.scalar_one_or_none()
+    if not slot:
+        raise HTTPException(status_code=404, detail="Slot not found")
+
+    slot.status = req.status
+    await db.flush()
+
+    slots = await _get_slots(db, robot_id)
+    session_id = await _get_active_session_id(db, robot_id)
+
+    await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+    await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, {"robot_id": robot_id, "slots": slots})
+    if session_id:
+        await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+        if req.status == LockboxSlotStatus.FULL:
+            await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_STORED, {
+                "slot_no": slot_no, "robot_id": robot_id,
+            })
+
+    return slot
 
 
 @router.get("/robots/{robot_id}/lockbox/logs", response_model=list[OpenLogResponse])
@@ -166,12 +226,9 @@ async def verify_lockbox_token(
     token.used_at = datetime.now(timezone.utc)
     await db.flush()
 
-    # If token has a slot, open it: update status + log + WS
     if token.slot_id:
         slot = await db.get(LockboxSlot, token.slot_id)
         if slot:
-            # Mark slot as EMPTY (customer retrieved items) or keep FULL until confirmed
-            # For pickup delivery the customer opens it to take goods → PICKEDUP
             slot.status = LockboxSlotStatus.PICKEDUP
 
             log = LockboxOpenLog(
@@ -185,7 +242,6 @@ async def verify_lockbox_token(
             db.add(log)
             await db.flush()
 
-            # WS broadcast
             slots = await _get_slots(db, robot_id)
             await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_OPENED, {
                 "slot_no": slot.slot_no, "actor": LockboxActor.CUSTOMER.value,
@@ -197,5 +253,7 @@ async def verify_lockbox_token(
                 "robot_id": robot_id, "slot_no": slot.slot_no, "actor": LockboxActor.CUSTOMER.value,
             })
             await manager.send_to_robot(robot_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+            await manager.send_to_mobile(req.session_id, WsEvent.LOCKBOX_UPDATED, {"slots": slots})
+            await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, {"robot_id": robot_id, "slots": slots})
 
     return {"ok": True, "verified": True}
