@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import math
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -7,6 +8,7 @@ from collections import deque
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
+from malle_controller.pid_edges import PID_EDGES, PID_DESTINATIONS, DEFAULT_PID_RADIUS
 
 
 class MissionGuideNode(Node, NavCore):
@@ -26,8 +28,9 @@ class MissionGuideNode(Node, NavCore):
             String, '/malle/mission_trigger', self._on_trigger, 10)
         self.result_pub  = self.create_publisher(String, '/malle/mission_result', 10)
 
-        self._active    = False
+        self._active = False
         self._poi_queue: deque[str] = deque()
+        self._prev_poi_id = ''
 
         self.get_logger().info('[MissionGuide] 준비 완료')
 
@@ -42,6 +45,7 @@ class MissionGuideNode(Node, NavCore):
 
     def _start(self, poi_ids: list[str]):
         self._poi_queue = deque(poi_ids)
+        self._prev_poi_id = ''
         self._active = True
         self.get_logger().info(f'[MissionGuide] 시작 – POI 큐: {list(self._poi_queue)}')
         self._navigate_next()
@@ -61,25 +65,31 @@ class MissionGuideNode(Node, NavCore):
         poi    = self._poi_mgr.get(poi_id)
         if poi is None:
             self.get_logger().warn(f'[MissionGuide] 알 수 없는 POI: {poi_id}, 건너뜀')
+            self._prev_poi_id = poi_id
             self._navigate_next()
             return
 
-        self.get_logger().info(f'[MissionGuide] → {poi_id} ({poi["name"]})')
+        edge = (self._prev_poi_id, poi_id)
+        pid_radius = PID_EDGES.get(edge, PID_DESTINATIONS.get(poi_id, DEFAULT_PID_RADIUS))
+        if edge in PID_EDGES:
+            self.get_logger().info(
+                f'[MissionGuide] PID 구간 {edge[0]}→{edge[1]} (radius={pid_radius:.2f}m)')
+
+        self.get_logger().info(f'[MissionGuide] → {poi_id}')
         self.navigate_to_pose(
             x=poi['x'], y=poi['y'], yaw=poi.get('yaw', 0.0),
             done_callback=self._on_nav_done,
+            pid_zone_radius=pid_radius,
         )
+        self._prev_poi_id = poi_id
 
-    def _on_nav_done(self, future):
-        result = future.result().result
-        status = future.result().status
-        # action_msgs/GoalStatus: SUCCEEDED = 4
-        if status == 4:
+    def _on_nav_done(self, success: bool):
+        if success:
             self.get_logger().info('[MissionGuide] POI 도착')
             # TODO: 도착 후 동작
             self._navigate_next()
         else:
-            self.get_logger().warn(f'[MissionGuide] 이동 실패 (status={status})')
+            self.get_logger().warn('[MissionGuide] 이동 실패')
             self._publish_result('exception')
 
     def _publish_result(self, result: str):
