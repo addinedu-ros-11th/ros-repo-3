@@ -65,13 +65,14 @@ class MissionFollowNode(Node):
             self.emotion_client.call_async(req)
 
     def _on_trigger(self, msg: String):
-        if msg.data.startswith('start_follow'):
+        token = msg.data.strip()
+        if token.startswith('start_follow'):
             self.active = True
-            parts = msg.data.split('_')
-            if len(parts) == 3 and parts[2].isdigit():
-                self.target_id = int(parts[2])
+            if ':' in token:
+                first = token.split(':', 1)[1].split(',')[0]
+                self.target_id = int(first) if first.isdigit() else 0
             else:
-                self.target_id = 0 # 기본 ID
+                self.target_id = 0
             self.get_logger().info(f"Started following target ID: {self.target_id}")
             self.state = "BACKING"
             self.start_time = time.time()

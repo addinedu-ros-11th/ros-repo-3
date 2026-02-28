@@ -49,7 +49,7 @@ class MissionGuideNode(Node, NavCore):
     def _stop(self):
         self._active = False
         self.cancel_navigation()
-        self.stop()
+        self.cmd_vel(0.0, 0.0)
         self.get_logger().info('[MissionGuide] 중지')
 
     def _navigate_next(self):

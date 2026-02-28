@@ -81,11 +81,11 @@ class MissionErrandNode(Node, NavCore):
             pass
 
         elif new_state == ErrandState.DONE:
-            self.stop()
+            self.cmd_vel(0.0, 0.0)
 
         elif new_state == ErrandState.IDLE:
             self.cancel_navigation()
-            self.stop()
+            self.cmd_vel(0.0, 0.0)
 
     def _go_to_poi(self, poi_id: str, done_cb):
         poi = self._poi_mgr.get(poi_id)
