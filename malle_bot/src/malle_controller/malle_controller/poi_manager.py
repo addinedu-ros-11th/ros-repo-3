@@ -34,7 +34,7 @@ class PoiManager:
         """시작 시 한 번 호출. 서버 실패 시 fallback."""
         try:
             data = self._api.get('/pois')
-            self.pois = {p['id']: p for p in data}
+            self.pois = {str(p['id']): self._normalize(p) for p in data}
             self._info(f'[PoiManager] {len(self.pois)}개 POI 로드 완료')
         except Exception as e:
             self._warn(f'[PoiManager] 서버 로드 실패 ({e}), fallback 사용')
@@ -48,6 +48,16 @@ class PoiManager:
 
     def all_ids(self) -> list[str]:
         return list(self.pois.keys())
+
+    @staticmethod
+    def _normalize(p: dict) -> dict:
+        """서버 필드(x_m, y_m)와 fallback 필드(x, y)를 통일."""
+        return {
+            **p,
+            'x': p.get('x') if p.get('x') is not None else p.get('x_m', 0.0),
+            'y': p.get('y') if p.get('y') is not None else p.get('y_m', 0.0),
+            'yaw': p.get('yaw', 0.0),
+        }
 
     @staticmethod
     def _load_fallback() -> dict:
