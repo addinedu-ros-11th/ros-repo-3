@@ -36,7 +36,7 @@ export default function Lockbox() {
   const getSlotColor = (status: LockboxStatus) => {
     switch (status) {
       case 'FULL': return 'bg-card-dark-blue dark:bg-blue-700';
-      case 'PICKED_UP': return 'bg-gradient-to-br from-emerald-500 to-teal-600 dark:from-emerald-600 dark:to-teal-700';
+      case 'PICKEDUP': return 'bg-gradient-to-br from-emerald-500 to-teal-600 dark:from-emerald-600 dark:to-teal-700';
       case 'RESERVED': return 'bg-card-pink dark:bg-pink-600';
       case 'EMPTY': return 'bg-muted border-2 border-dashed border-muted-foreground/30';
     }
@@ -63,11 +63,11 @@ export default function Lockbox() {
       <div className="grid grid-cols-2 gap-4">
         {lockboxSlots.map((slot) => (
           <button
-            key={slot.slotNumber}
-            onClick={() => handleSlotClick(slot.slotNumber, slot.status)}
+            key={slot.number}
+            onClick={() => handleSlotClick(slot.number, slot.status)}
             className={`rounded-3xl p-5 relative overflow-hidden transition-all active-press ${getSlotColor(slot.status)} ${
               slot.status === 'RESERVED' ? 'col-span-2 ring-4 ring-pink-200 dark:ring-pink-900 shadow-lg' : ''
-            } ${slot.status === 'PICKED_UP' ? 'col-span-2 ring-4 ring-emerald-200 dark:ring-emerald-900 shadow-lg' : ''
+            } ${slot.status === 'PICKEDUP' ? 'col-span-2 ring-4 ring-emerald-200 dark:ring-emerald-900 shadow-lg' : ''
             } ${slot.status === 'EMPTY' ? 'h-44 hover:bg-muted/80 hover:border-muted-foreground/50' : ''
             } ${(slot.status === 'FULL') ? 'h-44' : ''}`}
             disabled={slot.status === 'RESERVED'}
@@ -85,7 +85,7 @@ export default function Lockbox() {
                     ? 'bg-muted-foreground/10 text-muted-foreground' 
                     : 'bg-black/20 text-white'
                 }`}>
-                  Slot {slot.slotNumber}
+                  Slot {slot.number}
                 </span>
                 {slot.status === 'RESERVED' && (
                   <div className="flex items-center gap-1">
@@ -107,7 +107,7 @@ export default function Lockbox() {
                   </>
                 )}
 
-                {slot.status === 'PICKED_UP' && (
+                {slot.status === 'PICKEDUP' && (
                   <>
                     <h3 className="text-2xl font-bold text-white mb-2">Picked Up</h3>
                     {slot.orderInfo && (
@@ -140,7 +140,7 @@ export default function Lockbox() {
                 {slot.status === 'EMPTY' && (
                   <div className="flex flex-col items-center justify-center h-full">
                     <span className="material-icons-round text-3xl text-muted-foreground mb-2">add_circle_outline</span>
-                    <p className="font-semibold text-sm text-muted-foreground">Slot {slot.slotNumber} Empty</p>
+                    <p className="font-semibold text-sm text-muted-foreground">Slot {slot.number} Empty</p>
                   </div>
                 )}
               </div>

@@ -34,6 +34,7 @@ export function GuidePage() {
 
   const handleAddDestination = (store: typeof stores[0]) => {
     addToGuideQueue({
+      poiId: store.id,
       poiName: store.name,
       floor: store.location,
       estimatedTime: Math.floor(Math.random() * 5) + 2,
@@ -48,7 +49,8 @@ export function GuidePage() {
       
       setTimeout(() => {
         setRobotStatus('WAITING');
-        const items = guide.queue.filter(item => item.selected);
+        const { guide: latestGuide } = useRobotStore.getState();
+        const items = latestGuide.queue.filter(item => item.selected);
         if (items[0]) {
           setGuideItemStatus(items[0].id, 'ARRIVED');
         }
@@ -89,16 +91,17 @@ export function GuidePage() {
       }
       advanceGuide();
       setRobotStatus('MOVING');
-      
+
       const remaining = selectedItems.filter(item => item.status !== 'DONE');
       if (remaining.length > 1) {
         setTimeout(() => {
           setRobotStatus('WAITING');
-          // Find the next item that isn't done
-          const nextItems = guide.queue.filter(item => item.selected);
-          const nextIdx = guide.currentDestinationIndex + 1;
-          if (nextItems[nextIdx]) {
-            setGuideItemStatus(nextItems[nextIdx].id, 'ARRIVED');
+          // 클로저 대신 최신 store 상태 직접 참조
+          const { guide: latestGuide } = useRobotStore.getState();
+          const nextItems = latestGuide.queue.filter(item => item.selected);
+          const nextItem = nextItems[latestGuide.currentDestinationIndex];
+          if (nextItem) {
+            setGuideItemStatus(nextItem.id, 'ARRIVED');
           }
           setShowArrivalDialog(true);
         }, 3000);
@@ -139,10 +142,12 @@ export function GuidePage() {
     if (remaining.length > 1) {
       setTimeout(() => {
         setRobotStatus('WAITING');
-        const nextItems = guide.queue.filter(item => item.selected);
-        const nextIdx = guide.currentDestinationIndex + 1;
-        if (nextItems[nextIdx]) {
-          setGuideItemStatus(nextItems[nextIdx].id, 'ARRIVED');
+        // 클로저 대신 최신 store 상태 직접 참조
+        const { guide: latestGuide } = useRobotStore.getState();
+        const nextItems = latestGuide.queue.filter(item => item.selected);
+        const nextItem = nextItems[latestGuide.currentDestinationIndex];
+        if (nextItem) {
+          setGuideItemStatus(nextItem.id, 'ARRIVED');
         }
         setShowArrivalDialog(true);
       }, 3000);
@@ -533,11 +538,7 @@ export function GuidePage() {
           ) : (
             <div className="bg-slate-100 dark:bg-slate-800 rounded-2xl p-6 min-h-[200px]">
               <div className="relative">
-                {[...guide.queue].sort((a, b) => {
-                  const hashA = a.id.charCodeAt(0) + a.id.charCodeAt(a.id.length - 1);
-                  const hashB = b.id.charCodeAt(0) + b.id.charCodeAt(b.id.length - 1);
-                  return hashA - hashB;
-                }).map((item, index) => (
+                {guide.queue.map((item, index) => (
                   <div key={item.id} className="flex items-start animate-fade-in" style={{ animationDelay: `${index * 0.1}s` }}>
                     {/* Connector line */}
                     <div className="flex flex-col items-center mr-4">

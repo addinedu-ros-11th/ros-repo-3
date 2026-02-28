@@ -3,7 +3,6 @@ import math
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from collections import deque
 
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
@@ -12,21 +11,25 @@ from malle_controller.pid_edges import PID_EDGES, PID_DESTINATIONS, DEFAULT_PID_
 
 
 class MissionGuideNode(Node, NavCore):
+    """bridge_node 없이 단독 테스트용."""
 
     def __init__(self):
         Node.__init__(self, 'mission_guide')
         self.nav_core_init(self)
 
-        self._api = ApiClient(
-            base_url=self.declare_parameter('api_base_url', 'http://localhost:8000').value,
-            logger=self.get_logger(),
-        )
+        api_url = self.declare_parameter(
+            'api_base_url', 'http://localhost:8000/api/v1'
+        ).value
+
+        self._api     = ApiClient(base_url=api_url, logger=self.get_logger())
         self._poi_mgr = PoiManager(self._api, logger=self.get_logger())
         self._poi_mgr.load()
 
+        self._executor = GuideExecutor(self, self._api, self._poi_mgr)
+
+        # /malle/mission_trigger 구독 (mission_executor에서 발행)
         self.trigger_sub = self.create_subscription(
             String, '/malle/mission_trigger', self._on_trigger, 10)
-        self.result_pub  = self.create_publisher(String, '/malle/mission_result', 10)
 
         self._active = False
         self._poi_queue: deque[str] = deque()
@@ -36,6 +39,7 @@ class MissionGuideNode(Node, NavCore):
 
     def _on_trigger(self, msg: String):
         token = msg.data.strip()
+
         if token.startswith('start_guide:'):
             # 포맷: "start_guide:poi1,poi2,poi3"
             poi_ids = token.split(':', 1)[1].split(',')

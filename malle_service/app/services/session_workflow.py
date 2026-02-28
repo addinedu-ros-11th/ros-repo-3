@@ -6,7 +6,6 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.session import Session, SessionType, SessionStatus
@@ -18,7 +17,8 @@ from app.services.time_estimator import estimate_travel_time
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.schemas.session import SessionResponse, SessionAssignedPayload
-
+from sqlalchemy import select, update
+from app.models.lockbox import LockboxSlot, LockboxSlotStatus
 
 def _generate_pin(length: int = 4) -> str:
     return "".join(random.choices(string.digits, k=length))
@@ -169,7 +169,7 @@ async def transition_session_status(
 
 
 async def end_session(db: AsyncSession, session: Session, reason: str = "user_ended") -> Session:
-    """세션 종료 + 로봇 해제 + WS 알림."""
+    """세션 종료 + 로봇 해제 + 락박스 초기화 + WS 알림."""
     session.status = SessionStatus.ENDED
     session.ended_at = datetime.now(timezone.utc)
 
@@ -179,6 +179,12 @@ async def end_session(db: AsyncSession, session: Session, reason: str = "user_en
         if robot:
             robot.current_mode = RobotMode.IDLE
 
+        await db.execute(
+            update(LockboxSlot)
+            .where(LockboxSlot.robot_id == robot_id)
+            .values(status=LockboxSlotStatus.EMPTY)
+        )
+
     await db.flush()
     await db.refresh(session)
 
@@ -186,5 +192,12 @@ async def end_session(db: AsyncSession, session: Session, reason: str = "user_en
         session.id, robot_id,
         WsEvent.SESSION_ENDED, {"session_id": session.id, "reason": reason},
     )
+
+    if robot_id:
+        empty_slots = [{"slot_no": i, "status": "EMPTY"} for i in range(1, 6)]
+        await manager.broadcast_to_session(
+            session.id, robot_id,
+            WsEvent.LOCKBOX_UPDATED, {"robot_id": robot_id, "slots": empty_slots},
+        )
 
     return session
