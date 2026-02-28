@@ -140,7 +140,7 @@ class MissionFollowNode(Node):
                 if tz <= self.target_dist:
                     twist.linear.x = 0.08 if is_sharp_turn else 0.0
                 
-               self.last_error_x = current_error 
+                self.last_error_x = current_error
             
             else:
                 if self.state == "FOLLOWING":
