@@ -13,7 +13,7 @@ class NavCore:
         """미션 노드의 __init__에서 호출"""
         self._node = node
 
-        self._nav_client = ActionClient(node, NavigateToPose, 'navigate_to_pose')
+        self._nav_client = ActionClient(node, NavigateToPose, '/navigate_to_pose')
         self._cmd_pub = node.create_publisher(Twist, '/cmd_vel', 10)
 
         self._current_goal_handle = None
