@@ -7,6 +7,7 @@ from enum import Enum, auto
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
+from malle_controller.pid_edges import PID_EDGES, PID_DESTINATIONS, DEFAULT_PID_RADIUS
 
 class ErrandState(Enum):
     IDLE         = auto()
@@ -39,6 +40,7 @@ class MissionErrandNode(Node, NavCore):
         self._state      = ErrandState.IDLE
         self._store_poi  = ''
         self._meetup_poi = ''
+        self._prev_poi_id = ''
 
         self.get_logger().info('[MissionErrand] 준비 완료')
 
@@ -93,18 +95,22 @@ class MissionErrandNode(Node, NavCore):
             self.get_logger().error(f'[MissionErrand] POI 없음: {poi_id}')
             self._publish_result('exception')
             return
+        edge = (self._prev_poi_id, poi_id)
+        pid_radius = PID_EDGES.get(edge, PID_DESTINATIONS.get(poi_id, DEFAULT_PID_RADIUS))
+        self._prev_poi_id = poi_id
         self.navigate_to_pose(poi['x'], poi['y'], poi.get('yaw', 0.0),
-                              done_callback=done_cb)
+                              done_callback=done_cb,
+                              pid_zone_radius=pid_radius)
 
-    def _on_store_arrived(self, future):
-        if future.result().status == 4:
+    def _on_store_arrived(self, success: bool):
+        if success:
             self._transition(ErrandState.BOX_EMPTY)
         else:
             self.get_logger().warn('[MissionErrand] 매장 이동 실패')
             self._publish_result('exception')
 
-    def _on_meetup_arrived(self, future):
-        if future.result().status == 4:
+    def _on_meetup_arrived(self, success: bool):
+        if success:
             self._transition(ErrandState.BOX_FULL)
             self._publish_result('user_auth_done')   # TODO: 실제 인증 후 전송
         else:

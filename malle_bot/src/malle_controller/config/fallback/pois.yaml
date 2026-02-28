@@ -3,44 +3,22 @@
 # poi_manager.py 의 _load_fallback() 참고.
 
 pois:
-  - id: entrance
-    name: "입구"
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-    zone_id: zone_lobby
-
-  - id: cafe_a
-    name: "카페 A"
-    x: 3.5
-    y: 1.2
-    yaw: 1.5708
-    zone_id: zone_f1
-
-  - id: cafe_b
-    name: "카페 B"
-    x: 6.0
-    y: 1.2
-    yaw: 1.5708
-    zone_id: zone_f1
-
-  - id: store_a
-    name: "매장 A"
-    x: 3.5
-    y: 5.0
-    yaw: 3.1416
-    zone_id: zone_f1
-
-  - id: meetup_lobby
-    name: "meet-up 로비"
-    x: 1.0
-    y: 0.5
-    yaw: 0.0
-    zone_id: zone_lobby
-
-  - id: charging_dock
-    name: "충전 스테이션"
-    x: -1.0
-    y: -0.5
-    yaw: 3.1416
-    zone_id: zone_back
+  - {id: p0,  name: "P0",  x: 0.391, y: 0.351, yaw: 0.0}
+  - {id: p1,  name: "P1",  x: 0.391, y: 0.845, yaw: 0.0}
+  - {id: p2,  name: "P2",  x: 0.396, y: 1.846, yaw: 0.0}
+  - {id: p3,  name: "P3",  x: 1.200, y: 1.746, yaw: 0.0}
+  - {id: p4,  name: "P4",  x: 1.199, y: 0.850, yaw: 0.0}
+  - {id: p5,  name: "P5",  x: 1.650, y: 0.850, yaw: 0.0}
+  - {id: p6,  name: "P6",  x: 2.074, y: 0.856, yaw: 0.0}
+  - {id: p7,  name: "P7",  x: 1.243, y: 1.400, yaw: 0.0}
+  - {id: p8,  name: "P8",  x: 2.100, y: 0.247, yaw: 0.0}
+  - {id: p9,  name: "P9",  x: 2.397, y: 0.254, yaw: 0.0}
+  - {id: p10, name: "P10", x: 2.388, y: 1.297, yaw: 0.0}
+  - {id: p11, name: "P11", x: 1.804, y: 1.821, yaw: 0.0}
+  - {id: p12, name: "P12", x: 0.917, y: 0.300, yaw: 0.0}
+  - {id: p13, name: "P13", x: 0.917, y: 0.845, yaw: 0.0}
+  - {id: p14, name: "P14", x: 1.199, y: 0.300, yaw: 0.0}
+  - {id: p15, name: "P15", x: 2.000, y: 1.400, yaw: 0.0}
+  - {id: p16, name: "P16", x: 1.800, y: 0.300, yaw: 0.0}
+  - {id: charger1, name: "충전기 1", x: 0.250, y: 0.650, yaw: 0.0}
+  - {id: charger2, name: "충전기 2", x: 0.450, y: 0.650, yaw: 0.0}

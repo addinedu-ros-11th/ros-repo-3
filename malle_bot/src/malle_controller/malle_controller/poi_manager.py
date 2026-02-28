@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import yaml
 from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
 
 from malle_controller.api_client import ApiClient
 
 
-_FALLBACK_PATH = Path(__file__).parent.parent / 'config' / 'fallback' / 'pois.yaml'
+_FALLBACK_PATH = Path(get_package_share_directory('malle_controller')) / 'config' / 'fallback' / 'pois.yaml'
 
 
 class PoiManager:
@@ -36,9 +37,11 @@ class PoiManager:
             data = self._api.get('/pois')
             self.pois = {str(p['id']): self._normalize(p) for p in data}
             self._info(f'[PoiManager] {len(self.pois)}개 POI 로드 완료')
+            self._info(f'[PoiManager] 로드된 ID 목록: {list(self.pois.keys())}')
         except Exception as e:
             self._warn(f'[PoiManager] 서버 로드 실패 ({e}), fallback 사용')
             self.pois = self._load_fallback()
+            self._info(f'[PoiManager] fallback {len(self.pois)}개 POI 로드 완료 (경로: {_FALLBACK_PATH})')
 
     def get(self, poi_id: str) -> dict | None:
         return self.pois.get(poi_id)
@@ -64,7 +67,7 @@ class PoiManager:
         if _FALLBACK_PATH.exists():
             with open(_FALLBACK_PATH) as f:
                 data = yaml.safe_load(f) or {}
-            return {p['id']: p for p in data.get('pois', [])}
+            return {str(p['id']): PoiManager._normalize(p) for p in data.get('pois', [])}
         return {}
 
     def _info(self, msg: str):
