@@ -37,10 +37,11 @@ class MissionExecutor(Node):
     def __init__(self):
         super().__init__('mission_executor')
 
-        self.state           = RobotState.CHARGING
+        self.state           = RobotState.IDLE
         self.robot_id        = 'malle_01'
         self.battery         = 0.0
         self.current_task_id = ''
+        self._poi_ids        = ''
 
         self.cmd_sub = self.create_subscription(
             TaskCommand, '/malle/command', self._on_command, 10)
@@ -66,6 +67,7 @@ class MissionExecutor(Node):
             return
 
         self.current_task_id = msg.task_id
+        self._poi_ids        = msg.poi_ids
 
         handler = {
             'GUIDE':  self._cmd_guide,
@@ -131,9 +133,9 @@ class MissionExecutor(Node):
 
         trigger = {
             RobotState.IDLE      : 'idle',
-            RobotState.GUIDE     : 'start_guide',
-            RobotState.FOLLOW    : 'start_follow',
-            RobotState.ERRAND    : 'start_errand',
+            RobotState.GUIDE     : f'start_guide:{self._poi_ids}',
+            RobotState.FOLLOW    : f'start_follow:{self._poi_ids}',
+            RobotState.ERRAND    : f'start_errand:{self._poi_ids}',
             RobotState.BOX_EMPTY : 'open_box',
             RobotState.BOX_FULL  : 'lock_box',
             RobotState.EXCEPTION : 'handle_exception',
