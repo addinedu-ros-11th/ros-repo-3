@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAppStore } from '@/store/appStore';
+import { useAppStore, GuideDestination } from '@/store/appStore';
 import { toast } from 'sonner';
+import { shoppingApi } from '@/api/services';
+import { guideApi } from '@/api/guide';
 
 export default function ShoppingList() {
   const navigate = useNavigate();
-  const { shoppingList, toggleProductComplete, removeFromShoppingList, addToShoppingList, stores, storeProducts, addToGuideQueue, pois, sessionState } = useAppStore();
+  const { shoppingList, toggleProductComplete, removeFromShoppingList, addToShoppingList, stores, storeProducts, addToGuideQueue, pois, sessionState, currentSessionId, currentRobotId, _setGuideQueueFromServer } = useAppStore();
   const [showAddForm, setShowAddForm] = useState(false);
   const [addStep, setAddStep] = useState<'store' | 'product'>('store');
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
@@ -27,30 +29,51 @@ export default function ShoppingList() {
   const pendingCount = shoppingList.filter(p => !p.completed).length;
   const storeCount = Object.keys(groupedProducts).length;
 
-  const handleOptimizeRoute = () => {
-    const storesToAdd: typeof pois = [];
-    
+  const handleOptimizeRoute = async () => {
+    const storeIds: number[] = [];
     Object.keys(groupedProducts).forEach(storeId => {
       const hasIncomplete = groupedProducts[storeId].some(p => !p.completed);
       if (hasIncomplete) {
-        // storeId (string)를 number로 변환하여 stores 찾기
         const store = stores.find(s => s.slug === storeId || String(s.id) === storeId);
-        if (store && store.poi_id) {
-          // store.poi_id로 pois 찾기
-          const poi = pois.find(p => p.id === store.poi_id);
-          if (poi) {
-            storesToAdd.push(poi);
-            addToGuideQueue(poi);
-          }
-        }
+        if (store) storeIds.push(Number(store.id));
       }
     });
-    
-    if (storesToAdd.length > 0) {
-      toast.success(`${storesToAdd.length}개 스토어를 Guide queue에 추가했습니다`, { duration: 1500 });
-      navigate('/mode/guide');
-    } else {
+
+    if (storeIds.length === 0) {
       toast.error('추가할 미완료 항목이 없습니다', { duration: 1500 });
+      return;
+    }
+
+    try {
+      // 기존 큐 초기화 후 최적 경로로 교체
+      if (currentSessionId) {
+        await guideApi.clear(currentSessionId);
+      }
+
+      const ordered = await shoppingApi.optimizeByStores({
+        store_ids: storeIds,
+        robot_id: currentRobotId ?? undefined,
+        session_id: currentSessionId ?? undefined,
+      });
+
+      // 로컬 가이드 큐 갱신
+      _setGuideQueueFromServer(
+        ordered.map(item => ({
+          id: `guide-opt-${item.poi_id}`,
+          serverItemId: item.queue_item_id,
+          poiId: String(item.poi_id),
+          poiName: item.poi_name,
+          floor: '',
+          estimatedTime: 0,
+          status: 'PENDING' as GuideDestination['status'],
+          selected: true,
+        }))
+      );
+
+      toast.success(`${ordered.length}개 스토어를 최적 경로로 추가했습니다`, { duration: 1500 });
+      navigate('/mode/guide');
+    } catch {
+      toast.error('경로 최적화 중 오류가 발생했습니다', { duration: 1500 });
     }
   };
 

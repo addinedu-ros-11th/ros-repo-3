@@ -77,6 +77,24 @@ export interface ShoppingItemRes {
   status: string;
 }
 
+export interface OptimizedPoiRes {
+  order: number;
+  store_id: number;
+  poi_id: number;
+  poi_name: string;
+  x: number;
+  y: number;
+  queue_item_id: number | null;
+}
+
+export interface OptimizeByStoresReq {
+  store_ids: number[];
+  robot_id?: number;
+  start_x?: number;
+  start_y?: number;
+  session_id?: number;
+}
+
 export const shoppingApi = {
   getLists: (userId: number) => api.get<ShoppingListRes[]>(`/users/${userId}/shopping-lists`),
 
@@ -91,6 +109,9 @@ export const shoppingApi = {
 
   removeItem: (listId: number, itemId: number) =>
     api.delete(`/shopping-lists/${listId}/items/${itemId}`),
+
+  optimizeByStores: (data: OptimizeByStoresReq) =>
+    api.post<OptimizedPoiRes[]>('/shopping/optimize-route', data),
 };
 
 // --- Stores & POIs ---
