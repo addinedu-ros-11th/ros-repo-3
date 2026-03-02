@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import math
+from collections import deque
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -7,7 +8,7 @@ from std_msgs.msg import String
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
-from malle_controller.pid_edges import PID_EDGES, PID_DESTINATIONS, DEFAULT_PID_RADIUS
+from malle_controller.pid_edges import PID_EDGES, get_pid_radius
 
 
 class MissionGuideNode(Node, NavCore):
@@ -25,11 +26,10 @@ class MissionGuideNode(Node, NavCore):
         self._poi_mgr = PoiManager(self._api, logger=self.get_logger())
         self._poi_mgr.load()
 
-        self._executor = GuideExecutor(self, self._api, self._poi_mgr)
-
         # /malle/mission_trigger 구독 (mission_executor에서 발행)
         self.trigger_sub = self.create_subscription(
             String, '/malle/mission_trigger', self._on_trigger, 10)
+        self.result_pub = self.create_publisher(String, '/malle/mission_result', 10)
 
         self._active = False
         self._poi_queue: deque[str] = deque()
@@ -74,7 +74,7 @@ class MissionGuideNode(Node, NavCore):
             return
 
         edge = (self._prev_poi_id, poi_id)
-        pid_radius = PID_EDGES.get(edge, PID_DESTINATIONS.get(poi_id, DEFAULT_PID_RADIUS))
+        pid_radius = get_pid_radius(self._prev_poi_id, poi_id)
         if edge in PID_EDGES:
             self.get_logger().info(
                 f'[MissionGuide] PID 구간 {edge[0]}→{edge[1]} (radius={pid_radius:.2f}m)')

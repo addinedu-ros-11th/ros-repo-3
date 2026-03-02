@@ -17,3 +17,8 @@ PID_DESTINATIONS: dict[str, float] = {
 }
 
 DEFAULT_PID_RADIUS = 0.0  # 명시된 구간 외에는 PID 없이 Nav2만 사용
+
+def get_pid_radius(prev_poi: str, next_poi: str) -> float:
+    """(prev_poi, next_poi) 엣지에 맞는 PID 진입 반경 반환."""
+    edge = (prev_poi, next_poi)
+    return PID_EDGES.get(edge, PID_DESTINATIONS.get(next_poi, DEFAULT_PID_RADIUS))

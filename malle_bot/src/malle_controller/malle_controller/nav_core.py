@@ -8,6 +8,14 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from tf2_ros import Buffer, TransformListener
 
+# 네비게이션 상수
+MAX_LINEAR_VEL      = 0.15          # PID 최대 선속도 (m/s)
+MAX_ANGULAR_VEL     = 1.0           # PID 최대 각속도 (rad/s)
+ROTATE_FIRST_ANGLE  = math.radians(30)  # 이 각도 이상이면 제자리 회전 우선 (rad)
+ZONE_CHECK_PERIOD   = 0.1           # zone 체크 타이머 주기 (s)
+PID_PERIOD          = 0.02          # PID 루프 타이머 주기 (s)
+NAV_RETRY_MAX       = 1             # Nav2 실패 시 최대 재시도 횟수
+
 
 class NavCore:
     """Nav2 + cmd_vel 공용 엔진 (Node 믹스인용)."""
@@ -71,6 +79,8 @@ class NavCore:
         """
         if not self._nav_client.wait_for_server(timeout_sec=3.0):
             self._node.get_logger().error('[NavCore] navigate_to_pose: 액션 서버 없음')
+            if done_callback:
+                done_callback(False)
             return
 
         self._nav_gen        += 1
@@ -197,7 +207,7 @@ class NavCore:
         linear = (self.pid_kp_lin * dist
                   + self.pid_ki_lin * self._pid_int_dist
                   + self.pid_kd_lin * d_dist)
-        linear = float(max(0.0, min(linear, 0.15)))
+        linear = float(max(0.0, min(linear, MAX_LINEAR_VEL)))
 
         # Angular PID
         d_ang = (ang_err - self._pid_prev_ang) / dt
@@ -205,13 +215,13 @@ class NavCore:
         angular = (self.pid_kp_ang * ang_err
                    + self.pid_ki_ang * self._pid_int_ang
                    + self.pid_kd_ang * d_ang)
-        angular = float(max(-1.0, min(angular, 1.0)))
+        angular = float(max(-MAX_ANGULAR_VEL, min(angular, MAX_ANGULAR_VEL)))
 
         self._pid_prev_dist = dist
         self._pid_prev_ang  = ang_err
 
         # 방향이 크게 틀리면 제자리 회전 우선
-        if abs(ang_err) > math.radians(30):
+        if abs(ang_err) > ROTATE_FIRST_ANGLE:
             linear = 0.0
 
         self.cmd_vel(linear, angular)
@@ -235,10 +245,10 @@ class NavCore:
         self._cancel_timer('zone')
         success = (future.result().status == 4)
 
-        if not success and self._nav_retry_count < 1:
+        if not success and self._nav_retry_count < NAV_RETRY_MAX:
             self._nav_retry_count += 1
             self._node.get_logger().warn(
-                f'[NavCore] Nav2 실패, 1초 후 재시도 ({self._nav_retry_count}/1)')
+                f'[NavCore] Nav2 실패, 1초 후 재시도 ({self._nav_retry_count}/{NAV_RETRY_MAX})')
             self._nav_mode = 'IDLE'
             self._retry_timer = self._node.create_timer(1.0, self._on_retry_timer)
             return
@@ -298,10 +308,10 @@ class NavCore:
         """kind: 'zone' | 'pid'"""
         if kind == 'zone':
             self._cancel_timer('zone')
-            self._zone_timer = self._node.create_timer(0.1, self._zone_check)
+            self._zone_timer = self._node.create_timer(ZONE_CHECK_PERIOD, self._zone_check)
         elif kind == 'pid':
             self._cancel_timer('pid')
-            self._pid_timer = self._node.create_timer(0.02, self._pid_loop)
+            self._pid_timer = self._node.create_timer(PID_PERIOD, self._pid_loop)
 
     def _cancel_timer(self, kind: str):
         if kind == 'zone' and self._zone_timer is not None:

@@ -7,7 +7,7 @@ from enum import Enum, auto
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
-from malle_controller.pid_edges import PID_EDGES, PID_DESTINATIONS, DEFAULT_PID_RADIUS
+from malle_controller.pid_edges import get_pid_radius
 
 class ErrandState(Enum):
     IDLE         = auto()
@@ -95,8 +95,7 @@ class MissionErrandNode(Node, NavCore):
             self.get_logger().error(f'[MissionErrand] POI 없음: {poi_id}')
             self._publish_result('exception')
             return
-        edge = (self._prev_poi_id, poi_id)
-        pid_radius = PID_EDGES.get(edge, PID_DESTINATIONS.get(poi_id, DEFAULT_PID_RADIUS))
+        pid_radius = get_pid_radius(self._prev_poi_id, poi_id)
         self._prev_poi_id = poi_id
         self.navigate_to_pose(poi['x'], poi['y'], poi.get('yaw', 0.0),
                               done_callback=done_cb,
