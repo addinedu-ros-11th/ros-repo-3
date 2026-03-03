@@ -17,6 +17,7 @@ from app.schemas.session import (
     PinVerifyRequest,
     FollowTagRequest,
 )
+from app.utils.bridge import send_to_bridge
 
 class AssignRobotRequest(BaseModel):
     target_poi_id: int | None = None
@@ -166,6 +167,13 @@ async def set_follow_tag(
     # dashboard도 follow 시작 알림
     await manager.send_to_dashboard(WsEvent.FOLLOW_STARTED, follow_payload)
 
+    # bridge → mission_follow.py 트리거
+    if session.assigned_robot_id:
+        await send_to_bridge("follow/start", {
+            "session_id": session_id,
+            "tag_id": req.tag_code,
+        })
+
     return session
 
 
@@ -198,3 +206,22 @@ async def end_session(session_id: int, db: AsyncSession = Depends(get_db)):
 
     session = await end_session_workflow(db, session, reason="user_ended")
     return session
+
+
+@router.post("/sessions/{session_id}/follow/stop")
+async def stop_follow(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Follow 미션 중지."""
+    session = await db.get(Session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.assigned_robot_id:
+        raise HTTPException(status_code=400, detail="No robot assigned")
+
+    await send_to_bridge("follow/stop", {"session_id": session_id})
+
+    follow_payload = {"session_id": session_id, "robot_id": session.assigned_robot_id}
+    await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STOPPED, follow_payload)
+    await manager.send_to_mobile(session_id, WsEvent.FOLLOW_STOPPED, follow_payload)
+    await manager.send_to_dashboard(WsEvent.FOLLOW_STOPPED, follow_payload)
+
+    return {"ok": True}

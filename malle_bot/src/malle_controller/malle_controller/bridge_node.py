@@ -109,7 +109,6 @@ class CameraFrameBuffer:
         with self._lock:
             return self._frame
 
-
 camera_buffer = CameraFrameBuffer()
 
 
@@ -169,6 +168,22 @@ if HAS_FASTAPI:
         session_id: Optional[int] = None
         item_id: Optional[int] = None
         poi_name: Optional[str] = None
+
+    class FollowRequest(BaseModel):
+        session_id: Optional[int] = None
+        tag_id: int = 11
+
+    @bridge_app.post("/bridge/follow/start")
+    async def follow_start(req: FollowRequest):
+        if _ros_node:
+            _ros_node.publish_trigger(f"start_follow_{req.tag_id}")
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/follow/stop")
+    async def follow_stop():
+        if _ros_node:
+            _ros_node.publish_trigger("idle")
+        return {"ok": True}
 
     # 전역 참조 (main()에서 주입)
     _ros_node: Optional["BridgeNode"] = None
@@ -341,6 +356,7 @@ if HAS_ROS2:
             self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
             self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
+            self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
             self.get_logger().info("Bridge ready.")
@@ -403,6 +419,12 @@ if HAS_ROS2:
             msg = String()
             msg.data = command
             self._task_command_pub.publish(msg)
+
+        def publish_trigger(self, command: str):
+            """mission_follow.py 등 /malle/mission_trigger 구독자에게 명령 발행."""
+            msg = String()
+            msg.data = command
+            self._mission_trigger_pub.publish(msg)    
 
         def send_nav_goal(self, x: float, y: float, theta: float):
             """폴백용 — MissionExecutor 없을 때만 사용."""
