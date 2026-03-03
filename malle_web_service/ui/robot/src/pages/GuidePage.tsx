@@ -88,32 +88,40 @@ export function GuidePage() {
     }
 
     if (action === 'next') {
-      if (currentDestination?.serverItemId && currentSessionId) {
-        guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
-      }
+      setShowArrivalDialog(false);
       advanceGuide();
       setRobotStatus('MOVING');
-
-      const remaining = selectedItems.filter(item => item.status !== 'DONE');
-      if (remaining.length > 1) {
-        setTimeout(() => {
-          setRobotStatus('WAITING');
-          // 클로저 대신 최신 store 상태 직접 참조
-          const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
-          const nextItems = latestGuide.queue.filter(item => item.selected);
-          const nextItem = nextItems[latestGuide.currentDestinationIndex];
-          if (nextItem?.serverItemId && sid) {
-            guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
-          }
-          setShowArrivalDialog(true);
-        }, 3000);
-      } else {
-        setTimeout(() => {
-          stopGuide();
-          setRobotStatus('IDLE');
-        }, 1000);
+      if (currentSessionId) {
+        guideApi.advance(currentSessionId).catch(() => {});
       }
     }
+    // if (action === 'next') {
+    //   if (currentDestination?.serverItemId && currentSessionId) {
+    //     guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
+    //   }
+    //   advanceGuide();
+    //   setRobotStatus('MOVING');
+
+    //   const remaining = selectedItems.filter(item => item.status !== 'DONE');
+    //   if (remaining.length > 1) {
+    //     setTimeout(() => {
+    //       setRobotStatus('WAITING');
+    //       // 클로저 대신 최신 store 상태 직접 참조
+    //       const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
+    //       const nextItems = latestGuide.queue.filter(item => item.selected);
+    //       const nextItem = nextItems[latestGuide.currentDestinationIndex];
+    //       if (nextItem?.serverItemId && sid) {
+    //         guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
+    //       }
+    //       setShowArrivalDialog(true);
+    //     }, 3000);
+    //   } else {
+    //     setTimeout(() => {
+    //       stopGuide();
+    //       setRobotStatus('IDLE');
+    //     }, 1000);
+    //   }
+    // }
   };
 
   const handleWaitPinKey = useCallback((digit: string) => {
@@ -134,32 +142,41 @@ export function GuidePage() {
 
   const handleWaitNextStop = () => {
     setShowWaitingOverlay(false);
-    if (currentDestination?.serverItemId && currentSessionId) {
-      guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
-    }
     advanceGuide();
     setRobotStatus('MOVING');
-
-    const remaining = selectedItems.filter(item => item.status !== 'DONE');
-    if (remaining.length > 1) {
-      setTimeout(() => {
-        setRobotStatus('WAITING');
-        // 클로저 대신 최신 store 상태 직접 참조
-        const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
-        const nextItems = latestGuide.queue.filter(item => item.selected);
-        const nextItem = nextItems[latestGuide.currentDestinationIndex];
-        if (nextItem?.serverItemId && sid) {
-          guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
-        }
-        setShowArrivalDialog(true);
-      }, 3000);
-    } else {
-      setTimeout(() => {
-        stopGuide();
-        setRobotStatus('IDLE');
-      }, 1000);
+    if (currentSessionId) {
+      guideApi.advance(currentSessionId).catch(() => {});
     }
   };
+
+  // const handleWaitNextStop = () => {
+  //   setShowWaitingOverlay(false);
+  //   if (currentDestination?.serverItemId && currentSessionId) {
+  //     guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
+  //   }
+  //   advanceGuide();
+  //   setRobotStatus('MOVING');
+
+  //   const remaining = selectedItems.filter(item => item.status !== 'DONE');
+  //   if (remaining.length > 1) {
+  //     setTimeout(() => {
+  //       setRobotStatus('WAITING');
+  //       // 클로저 대신 최신 store 상태 직접 참조
+  //       const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
+  //       const nextItems = latestGuide.queue.filter(item => item.selected);
+  //       const nextItem = nextItems[latestGuide.currentDestinationIndex];
+  //       if (nextItem?.serverItemId && sid) {
+  //         guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
+  //       }
+  //       setShowArrivalDialog(true);
+  //     }, 3000);
+  //   } else {
+  //     setTimeout(() => {
+  //       stopGuide();
+  //       setRobotStatus('IDLE');
+  //     }, 1000);
+  //   }
+  // };
 
   const handleWaitEndGuide = () => {
     setShowWaitingOverlay(false);

@@ -6,8 +6,8 @@ mission_guide.py — 가이드 미션 실행기
   1. bridge_node → /bridge/navigate 수신
   2. MissionExecutor → GuideExecutor.start(session_id, first_item)
   3. GuideExecutor → 서버 guide_queue 조회 → POI 좌표로 Nav2 이동
-  4. 도착 → PATCH /guide-queue/{item_id} status=ARRIVED
-  5. 다음 PENDING 항목 반복 → 완료 시 DONE
+  4. 도착 → PATCH /guide-queue/{item_id} status=ARRIVED → advance() 대기
+  5. Robot UI "Next Stop" / Mobile "Mark as Arrived" → advance() → DONE → 다음 항목
 """
 
 import threading
@@ -37,6 +37,7 @@ class GuideExecutor(NavCore):
         self._log     = node.get_logger()
 
         self._active         = False
+        self._waiting_at_poi = False   # 도착 후 advance() 대기 중
         self._session_id: int | None = None
         self._queue: deque[dict] = deque()  # guide_queue_item dicts
         self._current_item: dict | None = None
@@ -50,9 +51,10 @@ class GuideExecutor(NavCore):
         queue_items: guide_queue API 응답 (PENDING 항목만)
         """
         with self._lock:
-            self._session_id = session_id
-            self._queue      = deque(queue_items)
-            self._active     = True
+            self._session_id     = session_id
+            self._queue          = deque(queue_items)
+            self._active         = True
+            self._waiting_at_poi = False
 
         self._log.info(
             f'[GuideExecutor] 시작 session={session_id} '
@@ -63,16 +65,48 @@ class GuideExecutor(NavCore):
     def stop(self):
         """강제 중지 (세션 종료 / E-Stop 등)."""
         with self._lock:
-            self._active = False
+            self._active         = False
+            self._waiting_at_poi = False
             self._queue.clear()
-            self._current_item = None
+            self._current_item   = None
         self.cancel_navigation()
         self.cmd_vel(0.0, 0.0)
         self._log.info('[GuideExecutor] 중지')
 
+    def advance(self):
+        """
+        다음 POI로 이동.
+        Robot UI 'Next Stop' 또는 Mobile 'Mark as Arrived' 눌렀을 때 호출.
+        대기 중이 아닐 때는 무시.
+        """
+        with self._lock:
+            if not self._waiting_at_poi:
+                self._log.warn('[GuideExecutor] advance() — 대기 중 아님, 무시')
+                return
+            self._waiting_at_poi = False
+            item = self._current_item
+
+        if item:
+            session_id = self._session_id
+            item_id    = item.get('id')
+            if session_id and item_id:
+                try:
+                    self._api.update_guide_item(session_id, item_id, 'DONE')
+                    self._log.info(
+                        f'[GuideExecutor] DONE 보고: item_id={item_id}'
+                    )
+                except Exception as e:
+                    self._log.warn(f'[GuideExecutor] DONE 보고 실패: {e}')
+
+        self._navigate_next()
+
     @property
     def is_active(self) -> bool:
         return self._active
+
+    @property
+    def is_waiting(self) -> bool:
+        return self._waiting_at_poi
 
     # ── 내부 ────────────────────────────────────────────────────────────────
 
@@ -132,7 +166,7 @@ class GuideExecutor(NavCore):
             self._on_nav_failed(item_id)
 
     def _on_arrived(self, item_id: int, poi_name: str):
-        """POI 도착 처리 — 서버에 ARRIVED 보고 후 다음 항목."""
+        """POI 도착 처리 — 서버에 ARRIVED 보고 후 advance() 대기."""
         session_id = self._session_id
         if session_id and item_id:
             try:
@@ -143,9 +177,10 @@ class GuideExecutor(NavCore):
             except Exception as e:
                 self._log.warn(f'[GuideExecutor] ARRIVED 보고 실패: {e}')
 
-        # 잠시 대기 후 다음 POI (고객이 매장 확인할 시간)
-        # TODO: 필요 시 대기 시간을 서버 config에서 받아올 수 있음
-        self._navigate_next()
+        # advance() 호출 전까지 대기 (Robot UI "Next Stop" / Mobile "Mark as Arrived")
+        with self._lock:
+            self._waiting_at_poi = True
+        self._log.info(f'[GuideExecutor] 대기 중: {poi_name}')
 
     def _on_nav_failed(self, item_id: int):
         """이동 실패 처리 — 항목 SKIPPED 처리 후 다음 항목 시도."""
