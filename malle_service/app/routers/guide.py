@@ -259,6 +259,7 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
         nav_y = float(poi.wait_y_m) if poi.wait_y_m is not None else float(poi.y_m)
         await send_to_bridge("navigate", {
             "robot_id": session.assigned_robot_id,
+            "session_id": session_id,
             "x": nav_x,
             "y": nav_y,
             "theta": 0.0,  # 도착 방향 — 필요 시 poi 테이블에 heading 컬럼 추가
