@@ -230,6 +230,10 @@
   .slot-pickup {
     @apply robot-card bg-gradient-to-br from-emerald-500 to-teal-600 text-white;
   }
+
+  .slot-pickedup {
+    @apply robot-card bg-gradient-to-br from-emerald-500 to-teal-600 text-white;
+  }
   
   .slot-reserved {
     @apply robot-card bg-card-pink text-white ring-4 ring-pink-200 dark:ring-pink-800 shadow-lg;
