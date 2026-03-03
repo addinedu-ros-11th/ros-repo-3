@@ -48,6 +48,7 @@ class RobotState(Enum):
     ERRAND    = auto()
     BOX_EMPTY = auto()
     BOX_FULL  = auto()
+    PARKING   = auto()
     EXCEPTION = auto()
 
 
@@ -56,7 +57,7 @@ class MissionExecutor(Node):
     def __init__(self):
         super().__init__('mission_executor')
 
-        self.state           = RobotState.CHARGING
+        self.state           = RobotState.IDLE
         self.robot_id        = 'malle_01'
         self.battery         = 0.0
         self.current_task_id = ''
@@ -89,9 +90,10 @@ class MissionExecutor(Node):
         self._poi_ids        = msg.poi_ids
 
         handler = {
-            'GUIDE':  self._cmd_guide,
-            'BROWSE': self._cmd_browse,
-            'ERRAND': self._cmd_errand,
+            'GUIDE':   self._cmd_guide,
+            'BROWSE':  self._cmd_browse,
+            'ERRAND':  self._cmd_errand,
+            'PARKING': self._cmd_parking,
         }.get(task_type)
 
         if handler:
@@ -117,6 +119,12 @@ class MissionExecutor(Node):
         else:
             self.get_logger().warn(f"ERRAND 명령 무시 (현재: {self.state.name})")
 
+    def _cmd_parking(self):
+        if self.state == RobotState.IDLE:
+            self._transition(RobotState.PARKING)
+        else:
+            self.get_logger().warn(f"PARKING 명령 무시 (현재: {self.state.name})")
+
     def _on_mission_result(self, msg: String):
         result = msg.data.strip().lower()
         self.get_logger().info(f"[RESULT] '{result}' (현재: {self.state.name})")
@@ -131,6 +139,7 @@ class MissionExecutor(Node):
             ('arrived_store',      RobotState.ERRAND)    : RobotState.BOX_EMPTY,
             ('box_loaded',         RobotState.BOX_EMPTY) : RobotState.BOX_FULL,
             ('user_auth_done',     RobotState.BOX_FULL)  : RobotState.ERRAND,
+            ('parked',             RobotState.PARKING)   : RobotState.IDLE,
             ('exception_resolved', RobotState.EXCEPTION) : RobotState.IDLE,
         }.get((result, self.state))
 
@@ -138,6 +147,15 @@ class MissionExecutor(Node):
             self._transition(next_state)
         else:
             self.get_logger().warn(f"처리되지 않은 result: '{result}' (state: {self.state.name})")
+
+    def _on_battery(self, msg: String):
+        try:
+            self.battery = float(msg.data)
+        except ValueError:
+            pass
+
+    def _on_battery_pct(self, msg: Float32):
+        self.battery = float(msg.data)
 
     def stop_all(self):
         """모든 실행 중인 미션 중지 (E-Stop / 세션 종료 시)."""
@@ -159,6 +177,7 @@ class MissionExecutor(Node):
             RobotState.ERRAND    : f'start_errand:{self._poi_ids}',
             RobotState.BOX_EMPTY : 'open_box',
             RobotState.BOX_FULL  : 'lock_box',
+            RobotState.PARKING   : 'start_parking',
             RobotState.EXCEPTION : 'handle_exception',
         }.get(new_state)
 

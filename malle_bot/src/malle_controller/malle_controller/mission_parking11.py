@@ -117,7 +117,7 @@ class PinkyParkingNode(Node):
         abs_err = abs(err_x)
 
         # 3. 주차 완료 시퀀스 (매우 근접 시 180도 회전)
-        if size > 320:
+        if size > 250:
             self._perform_uturn()
             return
 
@@ -141,7 +141,7 @@ class PinkyParkingNode(Node):
 
         # 6. 정밀 정렬 주행 (Precision Align)
         self.state = "PRECISION_ALIGN"
-        base_linear = 0.15
+        base_linear = 0.10
         turn_gain = 0.001 if abs_err > 100 else 0.002
         angular_z = -err_x * turn_gain
         self._send_twist(base_linear, angular_z)
