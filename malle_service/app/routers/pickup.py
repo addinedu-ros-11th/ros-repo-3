@@ -16,6 +16,7 @@ from app.models.mission import Mission, MissionType, MissionStatus
 from app.models.lockbox import LockboxSlot, LockboxSlotStatus
 from app.ws.manager import manager
 from app.ws.events import WsEvent
+from app.utils.bridge import send_to_bridge
 
 router = APIRouter()
 
@@ -209,6 +210,14 @@ async def create_pickup_order(
         await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
         await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, lockbox_payload)
 
+    # bridge → mission_errand.py 트리거 (store_poi_id 전달)
+    if session.assigned_robot_id:
+        await send_to_bridge("errand/start", {
+            "session_id": session_id,
+            "order_id": order.id,
+            "store_poi_id": req.pickup_poi_id,
+        })
+
     return order
 
 
@@ -320,5 +329,15 @@ async def set_meetup(
 
     if session and session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.PICKUP_MEET_SET, data)
+
+    # meetup 위치 확정 → bridge에 meetup poi 좌표로 이동 명령
+    if session and session.assigned_robot_id:
+        await send_to_bridge("errand/meetup", {
+            "session_id": session_id,
+            "order_id": order.id,
+            "meet_poi_id": order.meet_poi_id,
+            "meet_x_m": order.meet_x_m,
+            "meet_y_m": order.meet_y_m,
+        })
 
     return order

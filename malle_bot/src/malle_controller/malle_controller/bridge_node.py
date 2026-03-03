@@ -173,6 +173,14 @@ if HAS_FASTAPI:
         session_id: Optional[int] = None
         tag_id: int = 11
 
+    class ErrandRequest(BaseModel):
+        session_id: Optional[int] = None
+        order_id: Optional[int] = None
+        store_poi_id: Optional[int] = None
+        meet_poi_id: Optional[int] = None
+        meet_x_m: Optional[float] = None
+        meet_y_m: Optional[float] = None        
+
     @bridge_app.post("/bridge/follow/start")
     async def follow_start(req: FollowRequest):
         if _ros_node:
@@ -277,6 +285,32 @@ if HAS_FASTAPI:
             _mission_executor.stop_all()
         elif _ros_node:
             _ros_node.publish_cmd_vel(0.0, 0.0)
+        return {"ok": True}
+    
+    @bridge_app.post("/bridge/errand/start")
+    async def errand_start(req: ErrandRequest):
+        """pickup.py → mission_errand.py 트리거.
+        store_poi_id만 전달 (meetup은 /errand/meetup에서 별도 처리).
+        """
+        if _ros_node and req.store_poi_id:
+            _ros_node.publish_trigger(
+                f"start_errand:{req.store_poi_id},"
+            )
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/errand/meetup")
+    async def errand_meetup(req: ErrandRequest):
+        """meetup 위치 확정 → mission_errand.py에 meetup poi 전달."""
+        if _ros_node and req.meet_poi_id:
+            _ros_node.publish_trigger(
+                f"errand_meetup:{req.meet_poi_id}"
+            )
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/errand/stop")
+    async def errand_stop():
+        if _ros_node:
+            _ros_node.publish_trigger("idle")
         return {"ok": True}
 
     # ── MJPEG 스트리밍 ──────────────────────────────────────────────────────
