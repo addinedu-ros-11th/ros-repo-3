@@ -41,6 +41,8 @@ async def _get_lockbox_slots(db: AsyncSession, robot_id: int) -> list[dict]:
                     PickupStatus.CREATED,
                     PickupStatus.LOADED,
                     PickupStatus.MEET_SET,
+                    PickupStatus.RETURNING,
+                    PickupStatus.COMPLETED,
                 ]),
             ),
         )
@@ -144,10 +146,14 @@ async def create_pickup_order(
     # Reserve lockbox slot if robot assigned
     if session.assigned_robot_id:
         slot_result = await db.execute(
-            select(LockboxSlot).where(
+            select(LockboxSlot)
+            .where(
                 LockboxSlot.robot_id == session.assigned_robot_id,
                 LockboxSlot.status == LockboxSlotStatus.EMPTY,
-            ).limit(1)
+            )
+            .order_by(LockboxSlot.slot_no)
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         slot = slot_result.scalar_one_or_none()
         if slot:
@@ -221,10 +227,10 @@ async def update_pickup_status(
     elif req.status == PickupStatus.COMPLETED:
         order.completed_at = datetime.utcnow()
         # Release slot
-        if order.assigned_slot_id:
-            slot = await db.get(LockboxSlot, order.assigned_slot_id)
-            if slot:
-                slot.status = LockboxSlotStatus.EMPTY
+        # if order.assigned_slot_id:
+        #     slot = await db.get(LockboxSlot, order.assigned_slot_id)
+        #     if slot:
+        #         slot.status = LockboxSlotStatus.EMPTY
 
     await db.flush()
     await db.refresh(order)
