@@ -30,7 +30,7 @@ import httpx
 ROBOT_ID        = int(os.getenv("ROBOT_ID", "1"))
 ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "malle_15")
 
-MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000")
+MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
 STATE_UPDATE_INTERVAL = 0.5
 
@@ -353,7 +353,7 @@ if HAS_ROS2:
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
             try:
                 self._http_client.patch(
-                    f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/state",
+                    f"http://localhost:8000/api/v1/robots/{ROBOT_ID}/state",
                     json={
                         "x_m":          self._state["x_m"],
                         "y_m":          self._state["y_m"],
