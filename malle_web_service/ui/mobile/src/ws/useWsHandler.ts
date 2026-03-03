@@ -135,12 +135,20 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
     /* ───── Pickup events ───── */
 
     case "PICKUP_STATUS_CHANGED": {
-      // payload: PickupOrderResponse { id, status, pickup_poi_id, assigned_slot_id, created_channel, ... }
       const mappedStatus = mapPickupStatus(p.status as string) as PickupStatus;
       const currentOrder = useAppStore.getState().pickupOrder;
+      const serverOrderId = p.id as number;
 
-      if (!currentOrder) {
-        // Robot이 생성한 주문 수신 — Mobile에 pickupOrder 새로 생성
+      // 현재 주문이 있고 같은 주문이면 상태 업데이트
+      if (currentOrder && (currentOrder.serverOrderId === serverOrderId || currentOrder.serverOrderId === null)) {
+        if (mappedStatus === 'DONE') {
+          // COMPLETED → pickupOrder null로 초기화해서 다음 주문 받을 수 있게
+          useAppStore.setState({ pickupOrder: null });
+        } else {
+          store.setPickupStatus(mappedStatus);
+        }
+      } else if (!currentOrder && mappedStatus !== 'DONE') {
+        // Robot이 생성한 새 주문 수신
         const appStores = useAppStore.getState().stores;
         const storeMatch = appStores.find((s) => s.poi_id === (p.pickup_poi_id as number));
         const storeName = storeMatch?.name ?? `Pickup #${p.id}`;
@@ -156,8 +164,6 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
             slotId: (p.assigned_slot_id as number | null) ?? null,
           },
         });
-      } else {
-        store.setPickupStatus(mappedStatus);
       }
       break;
     }
@@ -176,6 +182,7 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
 
     case "LOCKBOX_UPDATED": {
       // payload: { slots: SlotResponse[] }
+      console.log("[WS] LOCKBOX_UPDATED received", p.slots);
       const slots = (p.slots as any[]) ?? [];
       if (slots.length) store._setLockboxSlotsFromServer(slots);
       break;

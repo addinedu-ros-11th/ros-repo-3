@@ -565,7 +565,20 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
 
   updateSlotStatus: (slotNumber, status) => {
     const state = get();
-    state.setSlotStatus(slotNumber, status);
+    // FULL로 바꿀 때 orderInfo 클리어 (PICKEDUP → 고객이 다시 넣은 물건은 새 보관)
+    if (status === 'FULL') {
+      state.setSlotStatus(slotNumber, status, { orderId: '', storeName: '', customerName: '' });
+      set((s) => ({
+        lockboxSlots: s.lockboxSlots.map((sl) =>
+          sl.number === slotNumber
+            ? { ...sl, status: 'FULL', orderInfo: undefined, isPickupOrder: false, pickedUp: false,
+                occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+            : sl
+        ),
+      }));
+    } else {
+      state.setSlotStatus(slotNumber, status);
+    }
     const robotId = state.currentRobotId ?? Number(state.robot.id);
     if (robotId) lockboxApi.updateSlotStatus(robotId, slotNumber, status).catch(() => {});
   },

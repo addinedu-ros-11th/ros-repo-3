@@ -23,46 +23,63 @@ router = APIRouter()
 async def _get_lockbox_slots(db: AsyncSession, robot_id: int) -> list[dict]:
     """락박스 슬롯 목록 조회 (LOCKBOX_UPDATED 브로드캐스트용).
 
-    pickup_poi_id는 항상 pois.id를 참조 (FK 정의).
-    store 이름은 pois → stores (stores.poi_id == pois.id) 경로로 조회하되,
-    store가 없는 POI(시설 등)면 poi.name을 그대로 사용.
+    각 슬롯당 활성 주문 1개만 매핑 (1:N 중복 방지).
+    활성 주문 기준: CREATED / LOADED / MEET_SET / RETURNING / COMPLETED
     """
-    from sqlalchemy import select as _select, and_
+    from sqlalchemy import select as _select
     from app.models.poi import Poi
     from app.models.store import Store
 
-    result = await db.execute(
-        _select(LockboxSlot, PickupOrder, Poi, Store)
-        .outerjoin(
-            PickupOrder,
-            and_(
-                PickupOrder.assigned_slot_id == LockboxSlot.id,
-                PickupOrder.status.in_([
-                    PickupStatus.CREATED,
-                    PickupStatus.LOADED,
-                    PickupStatus.MEET_SET,
-                    PickupStatus.RETURNING,
-                    PickupStatus.COMPLETED,
-                ]),
-            ),
-        )
-        # pickup_poi_id → pois.id (정방향 FK)
-        .outerjoin(Poi, Poi.id == PickupOrder.pickup_poi_id)
-        # pois.id → stores.poi_id (역방향: store가 있으면 매칭)
-        .outerjoin(Store, Store.poi_id == Poi.id)
+    # 슬롯 목록 조회
+    slot_result = await db.execute(
+        _select(LockboxSlot)
         .where(LockboxSlot.robot_id == robot_id)
         .order_by(LockboxSlot.slot_no)
     )
-    rows = result.all()
+    slots = slot_result.scalars().all()
+
+    # 활성 주문: 슬롯 id → 주문 1개 (가장 최근)
+    order_result = await db.execute(
+        _select(PickupOrder)
+        .where(
+            PickupOrder.assigned_slot_id.in_([s.id for s in slots]),
+            PickupOrder.status.in_([
+                PickupStatus.CREATED,
+                PickupStatus.LOADED,
+                PickupStatus.MEET_SET,
+                PickupStatus.RETURNING,
+                PickupStatus.COMPLETED,
+            ]),
+        )
+        .order_by(PickupOrder.id.desc())
+    )
+    orders = order_result.scalars().all()
+
+    # slot_id → 첫 번째 (최신) 주문만 매핑
+    slot_order_map: dict[int, PickupOrder] = {}
+    for o in orders:
+        if o.assigned_slot_id not in slot_order_map:
+            slot_order_map[o.assigned_slot_id] = o
+
+    # poi_id → poi name 조회
+    poi_ids = {o.pickup_poi_id for o in slot_order_map.values() if o.pickup_poi_id}
+    poi_map: dict[int, str] = {}
+    if poi_ids:
+        poi_result = await db.execute(
+            _select(Poi).where(Poi.id.in_(poi_ids))
+        )
+        for poi in poi_result.scalars().all():
+            poi_map[poi.id] = poi.name
+
     return [
         {
             "slot_no": slot.slot_no,
             "status": slot.status.value,
-            "order_id": order.id if order else None,
-            "pickup_poi_id": order.pickup_poi_id if order else None,
-            "store_name": poi.name if poi else None,
+            "order_id": slot_order_map[slot.id].id if slot.id in slot_order_map else None,
+            "pickup_poi_id": slot_order_map[slot.id].pickup_poi_id if slot.id in slot_order_map else None,
+            "store_name": poi_map.get(slot_order_map[slot.id].pickup_poi_id) if slot.id in slot_order_map else None,
         }
-        for slot, order, poi, store in rows
+        for slot in slots
     ]
 
 
@@ -217,20 +234,18 @@ async def update_pickup_status(
         raise HTTPException(status_code=404, detail="Pickup order not found")
 
     order.status = req.status
+
     if req.status == PickupStatus.LOADED:
         order.loaded_at = datetime.utcnow()
-        # 물건이 락박스에 적재됨 → PICKEDUP 상태 (고객이 아직 수령 전)
+        # 적재 완료 → slot PICKEDUP (고객 수령 대기)
         if order.assigned_slot_id:
             slot = await db.get(LockboxSlot, order.assigned_slot_id)
             if slot:
                 slot.status = LockboxSlotStatus.PICKEDUP
+
     elif req.status == PickupStatus.COMPLETED:
         order.completed_at = datetime.utcnow()
-        # Release slot
-        # if order.assigned_slot_id:
-        #     slot = await db.get(LockboxSlot, order.assigned_slot_id)
-        #     if slot:
-        #         slot.status = LockboxSlotStatus.EMPTY
+        # slot 상태는 건드리지 않음 — 고객이 박스 열고 꺼낼 때까지 PICKEDUP 유지
 
     await db.flush()
     await db.refresh(order)
@@ -243,8 +258,8 @@ async def update_pickup_status(
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.PICKUP_STATUS_CHANGED, data)
     await manager.send_to_dashboard(WsEvent.PICKUP_STATUS_CHANGED, data)
 
-    # 슬롯 상태 변경(PICKEDUP / EMPTY) 시 LOCKBOX_UPDATED 동기화
-    if req.status in (PickupStatus.LOADED, PickupStatus.COMPLETED) and session and session.assigned_robot_id:
+    # LOADED 시만 LOCKBOX_UPDATED 발행 (COMPLETED는 slot 변경 없음)
+    if req.status == PickupStatus.LOADED and session and session.assigned_robot_id:
         slots = await _get_lockbox_slots(db, session.assigned_robot_id)
         lockbox_payload = {"robot_id": session.assigned_robot_id, "slots": slots}
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
@@ -296,7 +311,6 @@ async def set_meetup(
     session = await db.get(Session, session_id)
     data = PickupOrderResponse.model_validate(order).model_dump(mode="json")
 
-    # meet_poi_name 추가 — Robot UI에서 meetupLocation 표시용
     if order.meet_poi_id:
         from app.models.poi import Poi as _Poi
         _poi = await db.get(_Poi, order.meet_poi_id)

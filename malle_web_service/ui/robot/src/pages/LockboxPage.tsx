@@ -88,19 +88,11 @@ export function LockboxPage() {
     if (!selectedSlot) return;
 
     if (stored) {
-      // "보관/적재 완료" 확인
-      // - 일반 보관이면 FULL
-      // - pickup 물건 수령이면 EMPTY로 바꾸는 게 맞음(고객이 꺼냈으니까)
-      // 여기서는 현재 slot 상태 기준으로 처리:
-      if (selectedSlot.status === 'PICKEDUP') {
-        // 고객이 픽업 물건을 가져갔다
-        updateSlotStatus(selectedSlot.number, 'EMPTY');
-      } else if (selectedSlot.status === 'EMPTY') {
-        // 빈 슬롯에 물건을 넣었다
-        updateSlotStatus(selectedSlot.number, 'FULL');
-      } else if (selectedSlot.status === 'FULL') {
-        // FULL이면 그대로 두거나 EMPTY로 바꾸는 정책이 있을 수 있음. 여기선 유지.
-      }
+      // Yes, Stored — 어떤 상태든 물건을 넣은 거니까 FULL
+      updateSlotStatus(selectedSlot.number, 'FULL');
+    } else {
+      // No — 물건 안 넣음/꺼냄 → EMPTY
+      updateSlotStatus(selectedSlot.number, 'EMPTY');
     }
 
     setShowConfirmDialog(false);
