@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRobotStore } from '@/stores/robotStore';
 import { toast } from 'sonner';
+import { poiApi } from '@/api/services';
 
 // ── 맵 물리 크기 (미터) ──────────────────────────────────────────────────────
-const MAP_WIDTH_M  = 2.5;
+const MAP_WIDTH_M  = 2.45;
 const MAP_HEIGHT_M = 2.0;
 
 /**
@@ -58,11 +59,9 @@ export function MapPage() {
 
   // ── API에서 POI 로드 ──────────────────────────────────────────────────────
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api/v1';
-    fetch(`${base}/pois`)
-      .then(r => r.json())
-      .then((data: Poi[]) => setPois(data))
-      .catch(() => { /* 오프라인 시 무시 */ });
+    poiApi.list()
+      .then((data) => setPois(data))
+      .catch(() => {});
   }, []);
 
   // ── highlight 쿼리 파라미터 처리 ─────────────────────────────────────────
@@ -121,7 +120,7 @@ export function MapPage() {
         <div
           className="relative rounded-2xl overflow-hidden border-2 border-slate-200 dark:border-slate-700 shadow-xl"
           style={{
-            aspectRatio: '2.5 / 2',
+            aspectRatio: '2.45 / 2',
             width: '100%',
             maxWidth: '520px',
           }}

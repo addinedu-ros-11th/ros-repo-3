@@ -6,7 +6,7 @@ import { VoiceCommandPanel } from '@/components/voice/VoiceCommandPanel';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 // 맵 물리 크기 (미터)
-const MAP_WIDTH_M = 2.5;
+const MAP_WIDTH_M = 2.45;
 const MAP_HEIGHT_M = 2.0;
 
 /**
@@ -65,7 +65,7 @@ export default function MapPage() {
               className="relative rounded-2xl overflow-hidden border-2 border-border/60 shadow-xl"
               style={{
                 /* 가로 2.5 : 세로 2 비율 */
-                aspectRatio: '2.5 / 2',
+                aspectRatio: '2.45 / 2',
                 width: '100%',
                 maxWidth: '380px',
                 maxHeight: 'calc(100vh - 200px)',
