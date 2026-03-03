@@ -240,6 +240,21 @@ if HAS_FASTAPI:
             threading.Thread(target=_nav, daemon=True).start()
             return {"ok": True, "mode": "direct_nav"}
 
+    @bridge_app.post("/bridge/guide/advance")
+    async def guide_advance():
+        if _mission_executor:
+            threading.Thread(
+                target=lambda: _mission_executor._guide.advance(),
+                daemon=True
+            ).start()
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/guide/stop")
+    async def guide_stop():
+        if _mission_executor:
+            _mission_executor._guide.stop()
+        return {"ok": True}
+
     @bridge_app.post("/bridge/stop")
     async def stop_mission():
         """E-Stop 또는 세션 종료 시 모든 미션 중지."""
