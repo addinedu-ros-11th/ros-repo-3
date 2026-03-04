@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -11,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models.robot import (
     Robot, RobotStateCurrent, RobotMode,
-    RobotStopState, EStopSource, RobotMotionState,
+    RobotStopState, EStopSource, RobotMotionState, RobotNavState,
 )
 from app.schemas.robot import (
     RobotResponse, RobotListResponse,
@@ -19,7 +20,8 @@ from app.schemas.robot import (
 )
 from app.ws.manager import manager
 from app.ws.events import WsEvent
-from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count
+from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count, get_occupied_poi_ids
+from app.config import BRIDGE_BASE_URL
 
 router = APIRouter()
 
@@ -45,6 +47,16 @@ async def dispatch_count(db: AsyncSession = Depends(get_db)):
     """현재 배정 가능한 로봇 수."""
     count = await get_available_robot_count(db)
     return {"available_count": count}
+
+
+@router.get("/robots/occupied-poi-ids")
+async def occupied_poi_ids(
+    exclude_robot_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """현재 PID 구간(OCCUPIED)을 점유 중인 로봇들의 target_poi_id 목록 반환."""
+    ids = await get_occupied_poi_ids(db, exclude_robot_id=exclude_robot_id)
+    return {"poi_ids": sorted(ids)}
 
 
 @router.get("/robots/{robot_id}", response_model=RobotResponse)
@@ -83,6 +95,9 @@ async def update_robot_state(
 
     now = datetime.now(timezone.utc)
 
+    prev_nav_state = state.nav_state
+    prev_target_poi_id = state.target_poi_id
+
     # Update only provided fields
     if req.x_m is not None:
         state.x_m = req.x_m
@@ -109,6 +124,18 @@ async def update_robot_state(
     robot.last_seen_at = now
 
     await db.flush()
+
+    # OCCUPIED → 비점유 전환: 같은 POI를 대기 중인 다음 세션 자동 실행
+    if (
+        prev_nav_state == RobotNavState.OCCUPIED
+        and req.nav_state is not None
+        and req.nav_state != RobotNavState.OCCUPIED
+        and prev_target_poi_id is not None
+    ):
+        from app.services.guide_service import find_sessions_blocked_by_poi, execute_guide_for_session
+        blocked = await find_sessions_blocked_by_poi(db, int(prev_target_poi_id), robot_id)
+        for blocked_session in blocked:
+            await execute_guide_for_session(db, blocked_session)
 
     # Auto-transition ASSIGNED → APPROACHING when robot starts moving
     from app.models.session import Session, SessionStatus
@@ -268,3 +295,42 @@ async def send_command(
     })
 
     return {"ok": True, "robot_id": robot_id, "command": req.command, "bridge_connected": bridge_ok}
+
+
+@router.get("/robots/{robot_id}/camera/stream")
+async def camera_stream(robot_id: int, db: AsyncSession = Depends(get_db)):
+    """MJPEG 스트림을 bridge_node에서 프록시."""
+    robot = await db.get(Robot, robot_id)
+    if not robot:
+        raise HTTPException(status_code=404, detail="Robot not found")
+
+    async def generate():
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "GET", f"{BRIDGE_BASE_URL}/camera/{robot_id}/stream"
+                ) as resp:
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        yield chunk
+        except (httpx.ConnectError, httpx.TimeoutException):
+            pass  # 클라이언트에서 연결 종료 시 조용히 종료
+
+    return StreamingResponse(
+        generate(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+@router.get("/robots/{robot_id}/camera/snapshot")
+async def camera_snapshot(robot_id: int, db: AsyncSession = Depends(get_db)):
+    """단일 JPEG 스냅샷을 bridge_node에서 프록시."""
+    robot = await db.get(Robot, robot_id)
+    if not robot:
+        raise HTTPException(status_code=404, detail="Robot not found")
+
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{BRIDGE_BASE_URL}/camera/{robot_id}/snapshot")
+            return StreamingResponse(iter([resp.content]), media_type="image/jpeg")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        raise HTTPException(status_code=503, detail="Camera unavailable")

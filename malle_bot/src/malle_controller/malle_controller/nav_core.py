@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import math
+import os
 import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped, Twist
+from std_msgs.msg import String as StringMsg
 from nav2_msgs.action import NavigateToPose
 from tf2_ros import Buffer, TransformListener
 
@@ -26,6 +28,15 @@ class NavCore:
 
         self._nav_client = ActionClient(node, NavigateToPose, '/navigate_to_pose')
         self._cmd_pub = node.create_publisher(Twist, '/cmd_vel', 10)
+        _ros_ns = os.getenv("ROBOT_NAMESPACE", "").strip("/")
+        _topic_ns = f"/{_ros_ns}" if _ros_ns else ""
+        self._nav_mode_pub = node.create_publisher(
+            StringMsg, f"{_topic_ns}/nav_mode" if _topic_ns else "nav_mode", 10
+        )
+        _occ_topic = f"{_topic_ns}/occupied_poi_ids" if _topic_ns else "occupied_poi_ids"
+        self._occ_sub = node.create_subscription(
+            StringMsg, _occ_topic, self._on_occupied_poi_ids_cb, 10
+        )
 
         self._current_goal_handle = None
         self._nav_gen = 0
@@ -43,6 +54,9 @@ class NavCore:
         self._goal_y      = 0.0
         self._goal_yaw    = 0.0
         self._nav_done_cb = None
+        self._poi_id      = None   # 현재 목적지 POI ID (int), None이면 체크 없음
+        self._waiting_at_zone  = False
+        self._occupied_poi_ids: set[int] = set()
 
         self._zone_timer  = None
         self._pid_timer   = None
@@ -66,7 +80,8 @@ class NavCore:
         self.pid_goal_threshold = 0.05
 
     def navigate_to_pose(self, x: float, y: float, yaw: float = 0.0,
-                         done_callback=None, pid_zone_radius: float = 0.5):
+                         done_callback=None, pid_zone_radius: float = 0.5,
+                         poi_id: int | None = None):
         """
         Nav2로 목표 지점까지 이동. pid_zone_radius 안에 들어오면 PID로 전환.
 
@@ -91,6 +106,8 @@ class NavCore:
         self._goal_yaw       = yaw
         self._nav_done_cb    = done_callback
         self._pid_zone_radius = pid_zone_radius
+        self._poi_id         = poi_id
+        self._waiting_at_zone = False
         self._nav_mode       = 'NAV2'
 
         goal = NavigateToPose.Goal()
@@ -104,6 +121,9 @@ class NavCore:
     def cancel_navigation(self):
         """진행 중인 Nav2 목표 및 PID 루프를 모두 취소"""
         self._nav_mode = 'IDLE'
+        self._pub_nav_mode('IDLE')
+        self._poi_id = None
+        self._waiting_at_zone = False
         self._cancel_timer('zone')
         self._cancel_timer('pid')
         if self._retry_timer is not None:
@@ -144,12 +164,23 @@ class NavCore:
             return
         dist = math.hypot(self._goal_x - self._cx, self._goal_y - self._cy)
         if self._pid_zone_radius > 0 and dist <= self._pid_zone_radius:
+            # 점유 체크: 다른 로봇이 같은 POI의 PID 구간에 있으면 대기
+            if self._poi_id is not None and self._poi_id in self._occupied_poi_ids:
+                if not self._waiting_at_zone:
+                    self._node.get_logger().info(
+                        f'[NavCore] poi_id={self._poi_id} 점유 중 — PID 진입 대기')
+                    self._waiting_at_zone = True
+                return  # 다음 zone_check에서 재시도
+            if self._waiting_at_zone:
+                self._node.get_logger().info('[NavCore] 점유 해제 — PID 진입')
+            self._waiting_at_zone = False
             self._node.get_logger().info(
                 f'[NavCore] PID 구간 진입 (dist={dist:.2f}m)')
             self._switch_to_pid()
 
     def _switch_to_pid(self):
         self._nav_mode = 'PID'
+        self._pub_nav_mode('PID')
         self._cancel_timer('zone')
 
         # Nav2 취소
@@ -190,6 +221,7 @@ class NavCore:
             self.cmd_vel(0.0, 0.0)
             self._cancel_timer('pid')
             self._nav_mode = 'IDLE'
+            self._pub_nav_mode('IDLE')
             self._node.get_logger().info('[NavCore] PID 목표 도달')
             if self._nav_done_cb:
                 self._nav_done_cb(True)
@@ -250,11 +282,13 @@ class NavCore:
             self._node.get_logger().warn(
                 f'[NavCore] Nav2 실패, 1초 후 재시도 ({self._nav_retry_count}/{NAV_RETRY_MAX})')
             self._nav_mode = 'IDLE'
+            self._pub_nav_mode('IDLE')
             self._retry_timer = self._node.create_timer(1.0, self._on_retry_timer)
             return
 
         self._nav_retry_count = 0
         self._nav_mode = 'IDLE'
+        self._pub_nav_mode('IDLE')
         if self._nav_done_cb:
             self._nav_done_cb(success)
 
@@ -330,6 +364,18 @@ class NavCore:
         pose.pose.orientation.z = math.sin(yaw / 2.0)
         pose.pose.orientation.w = math.cos(yaw / 2.0)
         return pose
+
+    def _on_occupied_poi_ids_cb(self, msg: StringMsg):
+        """bridge_node가 발행한 occupied POI ID 목록 수신 (콤마 구분 문자열)."""
+        data = msg.data.strip()
+        self._occupied_poi_ids = (
+            {int(x) for x in data.split(',') if x.strip()} if data else set()
+        )
+
+    def _pub_nav_mode(self, mode: str):
+        msg = StringMsg()
+        msg.data = mode
+        self._nav_mode_pub.publish(msg)
 
     @staticmethod
     def _ray_cast(px: float, py: float, polygon: list) -> bool:

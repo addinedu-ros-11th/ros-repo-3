@@ -99,7 +99,8 @@ class MissionErrandNode(Node, NavCore):
         self._prev_poi_id = poi_id
         self.navigate_to_pose(poi['x'], poi['y'], poi.get('yaw', 0.0),
                               done_callback=done_cb,
-                              pid_zone_radius=pid_radius)
+                              pid_zone_radius=pid_radius,
+                              poi_id=int(poi_id))
 
     def _on_store_arrived(self, success: bool):
         if success:

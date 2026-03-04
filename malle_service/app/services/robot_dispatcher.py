@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.robot import Robot, RobotMode
+from app.models.robot import Robot, RobotMode, RobotNavState, RobotStateCurrent
 from app.config import settings
 
 
@@ -107,3 +107,18 @@ async def get_dispatch_status(db: AsyncSession) -> dict:
         "available_robots": available_count,
         "robots": robot_list,
     }
+
+
+async def get_occupied_poi_ids(
+    db: AsyncSession,
+    exclude_robot_id: int | None = None,
+) -> set[int]:
+    """현재 PID 구간을 점유 중인 로봇들의 target_poi_id 집합 반환."""
+    query = select(RobotStateCurrent.target_poi_id).where(
+        RobotStateCurrent.nav_state == RobotNavState.OCCUPIED,
+        RobotStateCurrent.target_poi_id.is_not(None),
+    )
+    if exclude_robot_id is not None:
+        query = query.where(RobotStateCurrent.robot_id != exclude_robot_id)
+    result = await db.execute(query)
+    return {row[0] for row in result.all()}

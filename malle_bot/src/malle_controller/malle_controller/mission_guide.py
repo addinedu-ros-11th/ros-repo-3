@@ -84,6 +84,7 @@ class MissionGuideNode(Node, NavCore):
             x=poi['x'], y=poi['y'], yaw=poi.get('yaw', 0.0),
             done_callback=self._on_nav_done,
             pid_zone_radius=pid_radius,
+            poi_id=int(poi_id),
         )
         self._prev_poi_id = poi_id
 
