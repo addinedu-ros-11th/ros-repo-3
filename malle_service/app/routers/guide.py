@@ -261,6 +261,7 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
             "x": nav_x,
             "y": nav_y,
             "theta": 0.0,  # 도착 방향 — 필요 시 poi 테이블에 heading 컬럼 추가
+            "poi_name": poi.name,  # nav_node에서 웨이포인트 매핑용
         })
 
     return {"ok": True, "mission_id": mission.id, "executing_count": len(pending)}

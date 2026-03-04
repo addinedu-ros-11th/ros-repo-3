@@ -224,7 +224,7 @@ if HAS_FASTAPI:
         """
         if not _mission_executor:
             if _ros_node:
-                _ros_node.send_nav_goal(req.x, req.y, req.theta)
+                _ros_node.send_nav_goal(req.x, req.y, req.theta, poi_name=req.poi_name)
             return {"ok": True, "mode": "fallback_nav"}
 
         if req.session_id:
@@ -389,13 +389,22 @@ if HAS_ROS2:
             msg.data = command
             self._task_command_pub.publish(msg)
 
-        def send_nav_goal(self, x: float, y: float, theta: float):
-            """폴백용 — MissionExecutor 없을 때만 사용."""
+        def send_nav_goal(self, x: float, y: float, theta: float, poi_name: str = None):
+            """폴백용 — MissionExecutor 없을 때만 사용. nav_node.py가 구독."""
             import json as _j
             msg = String()
-            msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
+            if poi_name:
+                # POI 이름 + 좌표를 함께 전달 → nav_node에서 웨이포인트 매핑
+                msg.data = _j.dumps({
+                    "action": "navigate_to_poi",
+                    "poi_name": poi_name,
+                    "x": x, "y": y, "theta": theta,
+                })
+                self.get_logger().info(f"[fallback] Nav POI: '{poi_name}' ({x:.3f}, {y:.3f})")
+            else:
+                msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
+                self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
             self._task_command_pub.publish(msg)
-            self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
 
 
 # ─────────────────────────────────────────────────────────────
