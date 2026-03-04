@@ -17,6 +17,40 @@ PID_PERIOD          = 0.02          # PID 루프 타이머 주기 (s)
 NAV_RETRY_MAX       = 1             # Nav2 실패 시 최대 재시도 횟수
 
 
+# ─────────────────────────────────────────────────────────────
+# Waypoint Graph Loader
+# ─────────────────────────────────────────────────────────────
+
+def _load_waypoint_graph(yaml_path: str | None = None) -> tuple[dict, dict]:
+    """
+    waypoint_graph.yaml 로드.
+
+    Returns:
+        points: { wp_id: {"x": float, "y": float} }
+        edges:  { wp_id: [wp_id, ...] }  (단방향 — BFS에서 양방향 취급)
+    """
+    if yaml_path is None:
+        yaml_path = os.path.join(
+            os.path.dirname(__file__), '..', 'config', 'waypoint_graph.yaml'
+        )
+
+    try:
+        import yaml
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        points = {k: {"x": float(v["x"]), "y": float(v["y"])}
+                  for k, v in data.get("waypoints", {}).items()}
+        edges = {k: list(v) for k, v in data.get("edges", {}).items()}
+        return points, edges
+    except Exception as e:
+        print(f"[NavCore] waypoint_graph.yaml 로드 실패: {e} — 빈 그래프 사용")
+        return {}, {}
+
+
+# ─────────────────────────────────────────────────────────────
+# NavCore Mixin
+# ─────────────────────────────────────────────────────────────
+
 class NavCore:
     """Nav2 + cmd_vel 공용 엔진 (Node 믹스인용)."""
 
@@ -101,6 +135,37 @@ class NavCore:
 
         self._restart_timer('zone')
 
+    # ── 웨이포인트 경유 이동 (핵심 추가) ─────────────────────
+
+    def navigate_via_waypoints(self, target_x: float, target_y: float,
+                                target_yaw: float = 0.0,
+                                done_callback=None):
+        """
+        웨이포인트 그래프 경유 후 최종 좌표로 이동.
+
+        흐름:
+          1. 현재 위치 → 가장 가까운 시작 웨이포인트
+          2. 목적지 (target_x, target_y) → 가장 가까운 끝 웨이포인트
+          3. BFS로 시작 wp → 끝 wp 경로 계산
+          4. 경유 wp 순차 이동
+          5. 마지막에 실제 (target_x, target_y, target_yaw) 로 최종 이동
+          6. done_callback 호출
+
+        웨이포인트 그래프가 비어있으면 navigate_to_pose() 로 폴백.
+        """
+        if not self._wp_points:
+            self._node.get_logger().warn(
+                "[NavCore] 웨이포인트 그래프 없음 — 직접 이동으로 폴백"
+            )
+            self.navigate_to_pose(target_x, target_y, target_yaw, done_callback)
+            return
+
+        threading.Thread(
+            target=self._waypoint_nav_thread,
+            args=(target_x, target_y, target_yaw, done_callback),
+            daemon=True,
+        ).start()
+
     def cancel_navigation(self):
         """진행 중인 Nav2 목표 및 PID 루프를 모두 취소"""
         self._nav_mode = 'IDLE'
@@ -113,8 +178,185 @@ class NavCore:
             self._current_goal_handle.cancel_goal_async()
             self._current_goal_handle = None
 
+    # ── 웨이포인트 주행 스레드 ────────────────────────────────
+
+    def _waypoint_nav_thread(self, target_x: float, target_y: float,
+                              target_yaw: float, done_callback):
+        self._nav_abort = False
+
+        # 1. 현재 위치 파악
+        curr_x, curr_y = self._get_current_position()
+        if curr_x is None:
+            self._node.get_logger().warn(
+                "[NavCore] 현재 위치 파악 실패 — 직접 이동으로 폴백"
+            )
+            self._blocking_navigate(target_x, target_y, target_yaw)
+            if done_callback:
+                done_callback(None)
+            return
+
+        # 2. 시작/끝 웨이포인트 찾기
+        start_wp, start_dist = self._nearest_waypoint(curr_x, curr_y)
+        end_wp,   end_dist   = self._nearest_waypoint(target_x, target_y)
+
+        self._node.get_logger().info(
+            f"[NavCore] {start_wp}({start_dist:.2f}m) → "
+            f"{end_wp}({end_dist:.2f}m) | 목적지: ({target_x:.3f}, {target_y:.3f})"
+        )
+
+        # 3. BFS 경로
+        path = self._bfs(start_wp, end_wp)
+        if not path:
+            self._node.get_logger().warn(
+                f"[NavCore] 경로 없음 ({start_wp}→{end_wp}) — 직접 이동"
+            )
+            self._blocking_navigate(target_x, target_y, target_yaw)
+            if done_callback:
+                done_callback(None)
+            return
+
+        self._node.get_logger().info(
+            f"[NavCore] 경로: {' → '.join(path)} → 최종목적지"
+        )
+
+        # 4. 경유 웨이포인트 순차 이동 (마지막 wp 제외 — 최종 목적지로 대체)
+        waypoints_to_visit = path[:-1]  # 마지막 wp는 최종 목적지로 대체
+
+        for wp_id in waypoints_to_visit:
+            if self._nav_abort:
+                self._node.get_logger().info("[NavCore] 웨이포인트 주행 중단")
+                return
+
+            wp = self._wp_points[wp_id]
+            self._node.get_logger().info(f"[NavCore] → 웨이포인트 [{wp_id}]")
+
+            success = self._blocking_navigate(wp["x"], wp["y"], 0.0)
+            if not success:
+                self._node.get_logger().warn(
+                    f"[NavCore] [{wp_id}] 이동 실패 — 주행 중단"
+                )
+                if done_callback:
+                    done_callback(None)
+                return
+
+        if self._nav_abort:
+            return
+
+        # 5. 최종 목적지로 이동
+        self._node.get_logger().info(
+            f"[NavCore] → 최종 목적지 ({target_x:.3f}, {target_y:.3f})"
+        )
+        success = self._blocking_navigate(target_x, target_y, target_yaw)
+
+        # 6. 완료 콜백
+        if done_callback:
+            done_callback(success)
+
+    def _blocking_navigate(self, x: float, y: float, yaw: float = 0.0) -> bool:
+        """
+        Nav2 goal을 전송하고 완료될 때까지 블로킹.
+
+        Returns:
+            True  — SUCCEEDED
+            False — 실패 또는 취소
+        """
+        if not self._nav_client.wait_for_server(timeout_sec=3.0):
+            self._node.get_logger().error('[NavCore] 액션 서버 없음')
+            return False
+
+        goal = NavigateToPose.Goal()
+        goal.pose = self._make_pose_stamped(x, y, yaw)
+
+        # goal 전송
+        send_future = self._nav_client.send_goal_async(goal)
+
+        # future 완료 대기 (스핀 없이 폴링)
+        while not send_future.done():
+            if self._nav_abort:
+                return False
+            time.sleep(0.05)
+
+        goal_handle = send_future.result()
+        if not goal_handle.accepted:
+            self._node.get_logger().warn('[NavCore] goal 거절됨')
+            return False
+
+        self._current_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+
+        while not result_future.done():
+            if self._nav_abort:
+                goal_handle.cancel_goal_async()
+                return False
+            time.sleep(0.1)
+
+        self._current_goal_handle = None
+        from nav2_msgs.action import NavigateToPose as _NTP
+        result = result_future.result().status
+        # action status 4 = SUCCEEDED
+        return result == 4
+
+    # ── 웨이포인트 유틸 ──────────────────────────────────────
+
+    def _nearest_waypoint(self, x: float, y: float) -> tuple[str, float]:
+        """가장 가까운 웨이포인트 이름과 거리 반환."""
+        best_id, best_dist = None, float('inf')
+        for wp_id, coord in self._wp_points.items():
+            d = math.hypot(coord['x'] - x, coord['y'] - y)
+            if d < best_dist:
+                best_dist = d
+                best_id = wp_id
+        return best_id, best_dist
+
+    def _bfs(self, start: str, goal: str) -> list[str] | None:
+        """BFS로 웨이포인트 그래프에서 start → goal 최단 경로."""
+        if start == goal:
+            return [start]
+
+        # edges는 단방향으로 정의되어 있지만 양방향으로 취급
+        adj: dict[str, set[str]] = {}
+        for wp_id, neighbors in self._wp_edges.items():
+            adj.setdefault(wp_id, set()).update(neighbors)
+            for nb in neighbors:
+                adj.setdefault(nb, set()).add(wp_id)
+
+        visited = {start}
+        queue = deque([[start]])
+
+        while queue:
+            path = queue.popleft()
+            node = path[-1]
+            for nb in adj.get(node, []):
+                if nb not in visited:
+                    new_path = path + [nb]
+                    if nb == goal:
+                        return new_path
+                    visited.add(nb)
+                    queue.append(new_path)
+        return None
+
+    def _get_current_position(self) -> tuple[float | None, float | None]:
+        """TF로 현재 로봇 위치 반환. 실패 시 (None, None)."""
+        if not self._has_tf:
+            return None, None
+        try:
+            import rclpy.duration
+            trans = self._tf_buffer.lookup_transform(
+                'map', 'base_footprint', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+            return (
+                trans.transform.translation.x,
+                trans.transform.translation.y,
+            )
+        except Exception as e:
+            self._node.get_logger().warn(f'[NavCore] TF 실패: {e}')
+            return None, None
+
+    # ── 기타 유틸 ─────────────────────────────────────────────
+
     def cmd_vel(self, linear_x: float = 0.0, angular_z: float = 0.0):
-        """Twist를 /cmd_vel에 직접 퍼블리시"""
+        """Twist를 /cmd_vel에 직접 퍼블리시."""
         msg = Twist()
         msg.linear.x  = float(linear_x)
         msg.angular.z = float(angular_z)
@@ -272,33 +514,17 @@ class NavCore:
 
     @staticmethod
     def point_in_zone(px: float, py: float, zone: dict) -> bool:
-        """
-        zone dict 포맷 예시:
-          { "type": "rect",   "x": 1.0, "y": 2.0, "w": 3.0, "h": 2.0 }
-          { "type": "circle", "cx": 1.0, "cy": 2.0, "r": 1.5 }
-          { "type": "polygon","points": [[x0,y0],[x1,y1],...] }
-        """
         z_type = zone.get('type', 'rect')
-
         if z_type == 'rect':
             x, y, w, h = zone['x'], zone['y'], zone['w'], zone['h']
             return x <= px <= x + w and y <= py <= y + h
-
         if z_type == 'circle':
-            dx = px - zone['cx']
-            dy = py - zone['cy']
-            return math.hypot(dx, dy) <= zone['r']
-
+            return math.hypot(px - zone['cx'], py - zone['cy']) <= zone['r']
         if z_type == 'polygon':
             return NavCore._ray_cast(px, py, zone['points'])
-
         return False
 
     def get_zone_id(self, px: float, py: float, zones: dict) -> str | None:
-        """
-        zones: { zone_id: zone_dict, ... }
-        반환: 해당 좌표가 속한 첫 번째 zone_id, 없으면 None
-        """
         for zone_id, zone in zones.items():
             if self.point_in_zone(px, py, zone):
                 return zone_id
@@ -333,14 +559,14 @@ class NavCore:
 
     @staticmethod
     def _ray_cast(px: float, py: float, polygon: list) -> bool:
-        """Ray casting 알고리즘으로 폴리곤 내부 판단."""
         n = len(polygon)
         inside = False
         j = n - 1
         for i in range(n):
             xi, yi = polygon[i]
             xj, yj = polygon[j]
-            if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+            if ((yi > py) != (yj > py)) and \
+               (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
                 inside = not inside
             j = i
         return inside

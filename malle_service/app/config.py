@@ -1,6 +1,6 @@
 """Configuration loaded from environment variables."""
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict  # SettingsConfigDict 추가
 
 import os
 from pathlib import Path
@@ -37,7 +37,7 @@ class Config(BaseSettings):
     AVG_ROBOT_SPEED_M_PER_SEC: float = 0.5  # 평균 속도 (m/s)
     POI_STOP_TIME_SEC: int = 30  # POI당 정지 시간 (초)
     
-    class Config:
-        env_file = ".env"
+    # 수정된 부분: Pydantic V2 방식의 설정 및 extra='ignore' 추가
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Config()

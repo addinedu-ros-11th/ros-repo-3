@@ -501,7 +501,7 @@
 // }
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { robotApi, missionApi, eventApi, zoneApi, teleopApi } from '@/api/services';
+import { robotApi, missionApi, eventApi, zoneApi, teleopApi, lockboxApi, type LockboxSlotRes } from '@/api/services';
 import { useWsHandler } from '@/ws/useWsHandler';
 
 export interface Robot {
@@ -518,6 +518,7 @@ export interface Robot {
   eStopSource: 'ROBOT' | 'DASHBOARD' | null;
   commsStatus: 'STRONG' | 'WEAK' | 'LOST';
   sensorStatus: 'OK' | 'FAULT';
+  lockboxSlots: LockboxSlotRes[];
 }
 
 export interface Mission {
@@ -600,12 +601,12 @@ interface DashboardContextValue extends DashboardState {
 /* ───── fallback data ───── */
 
 const initialRobots: Robot[] = [
-  { id: 'R-422', battery: 82, mode: 'PICKUP', status: 'MOVING', position: { x: 120, y: 80 }, currentTarget: 'Zara Store', eta: 45, sessionId: 'S-001', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
-  { id: 'R-742', battery: 14, mode: 'FOLLOW', status: 'E_STOP', position: { x: 200, y: 150 }, currentTarget: null, eta: null, sessionId: 'S-002', lastSeen: '10:45 AM', eStopActive: true, eStopSource: 'ROBOT', commsStatus: 'WEAK', sensorStatus: 'OK' },
-  { id: 'R-109', battery: 98, mode: 'GUIDE', status: 'WAITING', position: { x: 60, y: 200 }, currentTarget: 'Nike', eta: 0, sessionId: 'S-003', lastSeen: '10:46 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
-  { id: 'R-305', battery: 45, mode: 'GUIDE', status: 'MOVING', position: { x: 300, y: 120 }, currentTarget: 'Apple Store', eta: 120, sessionId: 'S-004', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
-  { id: 'R-118', battery: 67, mode: 'PICKUP', status: 'MOVING', position: { x: 180, y: 250 }, currentTarget: 'Starbucks', eta: 30, sessionId: 'S-005', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
-  { id: 'R-991', battery: 5, mode: null, status: 'CHARGING', position: { x: 350, y: 300 }, currentTarget: null, eta: null, sessionId: null, lastSeen: '10:40 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK' },
+  { id: 'R-422', battery: 82, mode: 'PICKUP', status: 'MOVING', position: { x: 120, y: 80 }, currentTarget: 'Zara Store', eta: 45, sessionId: 'S-001', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK', lockboxSlots: [] },
+  { id: 'R-742', battery: 14, mode: 'FOLLOW', status: 'E_STOP', position: { x: 200, y: 150 }, currentTarget: null, eta: null, sessionId: 'S-002', lastSeen: '10:45 AM', eStopActive: true, eStopSource: 'ROBOT', commsStatus: 'WEAK', sensorStatus: 'OK', lockboxSlots: [] },
+  { id: 'R-109', battery: 98, mode: 'GUIDE', status: 'WAITING', position: { x: 60, y: 200 }, currentTarget: 'Nike', eta: 0, sessionId: 'S-003', lastSeen: '10:46 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK', lockboxSlots: [] },
+  { id: 'R-305', battery: 45, mode: 'GUIDE', status: 'MOVING', position: { x: 300, y: 120 }, currentTarget: 'Apple Store', eta: 120, sessionId: 'S-004', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK', lockboxSlots: [] },
+  { id: 'R-118', battery: 67, mode: 'PICKUP', status: 'MOVING', position: { x: 180, y: 250 }, currentTarget: 'Starbucks', eta: 30, sessionId: 'S-005', lastSeen: '10:47 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK', lockboxSlots: [] },
+  { id: 'R-991', battery: 5, mode: null, status: 'CHARGING', position: { x: 350, y: 300 }, currentTarget: null, eta: null, sessionId: null, lastSeen: '10:40 AM', eStopActive: false, eStopSource: null, commsStatus: 'STRONG', sensorStatus: 'OK', lockboxSlots: [] },
 ];
 
 const initialMissions: Mission[] = [
@@ -700,8 +701,18 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         eStopSource: r.state?.stop_source as Robot['eStopSource'] ?? null,
         commsStatus: r.is_online ? 'STRONG' : 'LOST',
         sensorStatus: 'OK',
+        lockboxSlots: [],
       }));
       setRobots(mapped);
+      // 각 로봇의 락박스 슬롯 상태 조회
+      mapped.forEach((robot) => {
+        const numId = parseInt(robot.id.replace('R-', ''));
+        if (!isNaN(numId)) {
+          lockboxApi.getSlots(numId)
+            .then((slots) => setRobots((prev) => prev.map((r) => r.id === robot.id ? { ...r, lockboxSlots: slots } : r)))
+            .catch(() => {});
+        }
+      });
     }).catch(() => {});
 
     // Missions
@@ -871,6 +882,40 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         type: 'LOCKBOX_OPEN',
         severity: 'INFO',
         message: `Lockbox slot ${data.slot_no || '?'} opened`,
+        payload: data,
+      }, ...prev].slice(0, 50));
+    }, []),
+
+    onLockboxUpdated: useCallback((robotId: number, slots: Record<string, any>[]) => {
+      const rid = `R-${robotId}`;
+      setRobots(prev => prev.map(r => r.id === rid
+        ? { ...r, lockboxSlots: slots as LockboxSlotRes[] }
+        : r
+      ));
+    }, []),
+
+    onFollowStarted: useCallback((data: Record<string, any>) => {
+      setEvents(prev => [{
+        id: `E-flw-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: `R-${data.robot_id || 'unknown'}`,
+        sessionId: data.session_id ? `S-${data.session_id}` : null,
+        type: 'MISSION_COMPLETE',
+        severity: 'INFO',
+        message: `Follow mode started (tag ${data.tag_code || '?'})`,
+        payload: data,
+      }, ...prev].slice(0, 50));
+    }, []),
+
+    onFollowStopped: useCallback((data: Record<string, any>) => {
+      setEvents(prev => [{
+        id: `E-flw-${Date.now()}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        robotId: `R-${data.robot_id || 'unknown'}`,
+        sessionId: data.session_id ? `S-${data.session_id}` : null,
+        type: 'MISSION_COMPLETE',
+        severity: 'INFO',
+        message: `Follow mode stopped`,
         payload: data,
       }, ...prev].slice(0, 50));
     }, []),

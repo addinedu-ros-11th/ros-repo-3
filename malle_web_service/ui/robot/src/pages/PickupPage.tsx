@@ -1,34 +1,50 @@
 import { useRobotStore } from '@/stores/robotStore';
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { stores, getProductsByStore } from '@/data/stores';
+import { storeApi, type ProductRes, type StoreRes } from '@/api/services';
 import type { OrderItem, PickupStatus } from '@/types/robot';
 
 export function PickupPage() {
-  const { pickup, createPickupOrder, setShowLoadingOverlay, lockboxSlots, pendingPickupStore, setPendingPickupStore } = useRobotStore();
+  const { pickup, createPickupOrder, setShowLoadingOverlay, lockboxSlots, pendingPickupStore, setPendingPickupStore, storeList, storePoiMap } = useRobotStore();
   const navigate = useNavigate();
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [selectedStore, setSelectedStore] = useState<string | null>(null);
+  const [selectedStore, setSelectedStore] = useState<number | null>(null);
   const [cart, setCart] = useState<OrderItem[]>([]);
+  const [productList, setProductList] = useState<ProductRes[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
 
-  // Check for pending pickup store from voice command
+  // Check for pending pickup store from voice command (SearchPage sets string id)
   useEffect(() => {
     if (pendingPickupStore) {
-      handleStoreSelect(pendingPickupStore);
+      const storeId = Number(pendingPickupStore);
+      if (!isNaN(storeId)) handleStoreSelect(storeId);
       setPendingPickupStore(null);
     }
   }, [pendingPickupStore]);
 
-  const hasEmptySlot = lockboxSlots.some(s => s.status === 'EMPTY');
-  const products = selectedStore ? getProductsByStore(selectedStore) : [];
+  // Fetch products when store selected
+  useEffect(() => {
+    if (selectedStore === null) {
+      setProductList([]);
+      return;
+    }
+    setProductsLoading(true);
+    storeApi.getProducts(selectedStore)
+      .then(setProductList)
+      .catch(() => setProductList([]))
+      .finally(() => setProductsLoading(false));
+  }, [selectedStore]);
 
-  const handleStoreSelect = (storeId: string) => {
+  const hasEmptySlot = lockboxSlots.some(s => s.status === 'EMPTY');
+  const openStores = storeList.filter(s => s.name);
+
+  const handleStoreSelect = (storeId: number) => {
     setSelectedStore(storeId);
     setCart([]);
     setStep(2);
   };
 
-  const handleAddProduct = (product: typeof products[0]) => {
+  const handleAddProduct = (product: ProductRes) => {
     setCart(prev => {
       const existing = prev.find(item => item.name === product.name);
       if (existing) {
@@ -53,14 +69,14 @@ export function PickupPage() {
   };
 
   const handlePayment = () => {
-    const store = stores.find(s => s.id === selectedStore);
-    if (!store) return;
+    const store = storeList.find(s => s.id === selectedStore);
+    if (!store || !store.name) return;
 
     createPickupOrder({
       orderId: `#${Math.floor(Math.random() * 9000) + 1000}`,
       storeName: store.name,
       items: cart,
-      slotId: 0, // Will be assigned by createPickupOrder
+      slotId: 0,
       meetupLocation: null,
     });
 
@@ -209,59 +225,80 @@ export function PickupPage() {
 
       {/* Step 1: Select Store */}
       {step === 1 && (
-        <div className="grid grid-cols-3 gap-4">
-          {stores.filter(s => s.open).map((store) => (
-            <button
-              key={store.id}
-              onClick={() => handleStoreSelect(store.id)}
-              disabled={!hasEmptySlot}
-              className="robot-card-white text-left hover:border-primary disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <div className="flex items-center space-x-3">
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                  <span className="material-icons-round text-primary">{store.icon}</span>
-                </div>
-                <div>
-                  <p className="font-semibold text-foreground">{store.name}</p>
-                  <p className="text-sm text-muted-foreground">{store.category}</p>
-                </div>
-              </div>
-            </button>
-          ))}
+        <div>
+          {openStores.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              <span className="material-icons-round text-5xl mb-3 block">store</span>
+              <p className="font-medium">Loading stores...</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-4">
+              {openStores.map((store) => (
+                <button
+                  key={store.id}
+                  onClick={() => handleStoreSelect(store.id)}
+                  disabled={!hasEmptySlot}
+                  className="robot-card-white text-left hover:border-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                      <span className="material-icons-round text-primary">store</span>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-foreground">{store.name}</p>
+                      <p className="text-sm text-muted-foreground">{store.category || 'Store'}</p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Step 2: Select Products */}
-      {step === 2 && selectedStore && (
+      {step === 2 && selectedStore !== null && (
         <div className="grid grid-cols-2 gap-6">
           <div className="robot-card-white">
             <h3 className="text-lg font-bold text-foreground mb-4">Products</h3>
-            <div className="space-y-3">
-              {products.map((product) => {
-                const inCart = cart.find(item => item.name === product.name);
-                return (
-                  <div key={product.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-700">
-                    <div>
-                      <p className="font-semibold text-foreground">{product.name}</p>
-                      <p className="text-sm text-primary font-medium">${product.price.toFixed(2)}</p>
+            {productsLoading ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <span className="material-icons-round text-3xl animate-spin mb-2">sync</span>
+                <p>Loading...</p>
+              </div>
+            ) : productList.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <span className="material-icons-round text-4xl mb-2">inventory_2</span>
+                <p>No products available</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {productList.map((product) => {
+                  const inCart = cart.find(item => item.name === product.name);
+                  return (
+                    <div key={product.id} className="flex items-center justify-between p-3 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <div>
+                        <p className="font-semibold text-foreground">{product.name}</p>
+                        <p className="text-sm text-primary font-medium">${product.price.toFixed(2)}</p>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {inCart && (
+                          <>
+                            <button onClick={() => handleRemoveProduct(product.name)} className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+                              <span className="material-icons-round text-sm">remove</span>
+                            </button>
+                            <span className="w-8 text-center font-bold">{inCart.quantity}</span>
+                          </>
+                        )}
+                        <button onClick={() => handleAddProduct(product)} className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                          <span className="material-icons-round text-sm">add</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      {inCart && (
-                        <>
-                          <button onClick={() => handleRemoveProduct(product.name)} className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                            <span className="material-icons-round text-sm">remove</span>
-                          </button>
-                          <span className="w-8 text-center font-bold">{inCart.quantity}</span>
-                        </>
-                      )}
-                      <button onClick={() => handleAddProduct(product)} className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
-                        <span className="material-icons-round text-sm">add</span>
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="robot-card-white">
@@ -303,7 +340,7 @@ export function PickupPage() {
             <span className="material-icons-round text-6xl text-primary mb-4 block">credit_card</span>
             <h3 className="text-xl font-bold text-foreground mb-2">Payment</h3>
             <p className="text-muted-foreground mb-6">Total: ${totalPrice.toFixed(2)}</p>
-            
+
             <button onClick={handlePayment} className="btn-primary w-full mb-4">
               <span className="material-icons-round mr-2 align-middle">touch_app</span>
               Tap to Pay
