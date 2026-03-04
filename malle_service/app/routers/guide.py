@@ -1,5 +1,6 @@
 """Guide mode endpoints."""
 
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,7 @@ from app.models.poi import Poi
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.utils.bridge import send_to_bridge
+from app.utils.latency_log import log as _log
 
 router = APIRouter()
 
@@ -183,6 +185,7 @@ async def update_guide_item_status(
 @router.post("/sessions/{session_id}/guide-queue/execute")
 async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db)):
     """Start executing pending guide queue items. Creates/updates mission."""
+    _log("L1", "guide_execute", session_id=session_id)
     session = await db.get(Session, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

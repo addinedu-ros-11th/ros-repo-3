@@ -20,9 +20,22 @@ import os
 import sys
 import threading
 import time
-from typing import Optional
+from collections import deque
+from typing import Any, Optional
 
 import httpx
+
+# ─────────────────────────────────────────────────────────────
+# Latency log buffer (accessible via GET /logs)
+# ─────────────────────────────────────────────────────────────
+_log_buf: deque = deque(maxlen=500)
+
+
+def _llog(layer: str, event: str, **extra: Any) -> float:
+    ts = time.time()
+    _log_buf.append({"ts": ts, "layer": layer, "event": event, **extra})
+    return ts
+
 
 # ─────────────────────────────────────────────────────────────
 # Configuration
@@ -190,6 +203,15 @@ if HAS_FASTAPI:
             },
         }
 
+    @bridge_app.get("/logs")
+    async def get_logs():
+        return {"logs": list(_log_buf)}
+
+    @bridge_app.delete("/logs")
+    async def clear_logs():
+        _log_buf.clear()
+        return {"ok": True}
+
     @bridge_app.post("/bridge/command")
     async def receive_command(req: CommandRequest):
         if _ros_node:
@@ -222,19 +244,28 @@ if HAS_FASTAPI:
         session_id 있으면 MissionExecutor.dispatch_guide() 사용,
         없으면 단순 좌표 이동.
         """
+        _llog("L3", "navigate_received",
+              session_id=req.session_id, x=req.x, y=req.y,
+              item_id=req.item_id, poi_name=req.poi_name)
+
         if not _mission_executor:
             if _ros_node:
                 _ros_node.send_nav_goal(req.x, req.y, req.theta)
+                _llog("L4", "ros2_dispatched", mode="fallback_nav",
+                      session_id=req.session_id)
             return {"ok": True, "mode": "fallback_nav"}
 
         if req.session_id:
             def _dispatch():
+                _llog("L4", "ros2_dispatched", mode="guide",
+                      session_id=req.session_id)
                 _mission_executor.dispatch_guide(req.session_id)
             threading.Thread(target=_dispatch, daemon=True).start()
             return {"ok": True, "mode": "guide", "session_id": req.session_id}
         else:
             def _nav():
-                from malle_controller.nav_core import NavCore
+                _llog("L4", "ros2_dispatched", mode="direct_nav",
+                      session_id=req.session_id)
                 if hasattr(_mission_executor, 'navigate_to_pose'):
                     _mission_executor.navigate_to_pose(req.x, req.y, req.theta)
             threading.Thread(target=_nav, daemon=True).start()
@@ -351,6 +382,7 @@ if HAS_ROS2:
 
         def _push_state(self):
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
+            t0 = time.perf_counter()
             try:
                 self._http_client.patch(
                     f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/state",
@@ -363,10 +395,13 @@ if HAS_ROS2:
                         "motion_state": motion,
                     },
                 )
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+                _llog("L5", "state_pushed", ok=True, ms=round(elapsed_ms, 2))
             except httpx.ConnectError:
                 pass
             except Exception as e:
                 self.get_logger().warning(f"State push failed: {e}")
+                _llog("L5", "state_pushed", ok=False, error=str(e))
 
         def publish_cmd_vel(self, linear_x: float, angular_z: float):
             msg = Twist()

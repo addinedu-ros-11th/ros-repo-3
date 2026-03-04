@@ -14,8 +14,11 @@ bridge_node가 오프라인이어도 예외를 던지지 않고 False 반환.
 
 import logging
 import os
+import time
 
 import httpx
+
+from app.utils.latency_log import log as _log
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +39,17 @@ async def send_to_bridge(endpoint: str, payload: dict) -> bool:
         False — 연결 실패 또는 오류 (로그만 남기고 흐름 유지)
     """
     url = f"{BRIDGE_NODE_URL}/bridge/{endpoint}"
+    t0 = time.perf_counter()
+    session_id = payload.get("session_id")
     try:
         async with httpx.AsyncClient(timeout=1.0) as client:
             resp = await client.post(url, json=payload)
-            return resp.status_code == 200
+            ok = resp.status_code == 200
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            _log("L3", "bridge_call_done",
+                 endpoint=endpoint, ok=ok, ms=round(elapsed_ms, 2),
+                 **({} if session_id is None else {"session_id": session_id}))
+            return ok
     except (httpx.ConnectError, httpx.TimeoutException):
         logger.debug(f"[bridge] {endpoint} unreachable — skipped")
         return False

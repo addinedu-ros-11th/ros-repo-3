@@ -14,6 +14,7 @@ from app.models import *  # noqa: F401,F403  — register all models
 
 from app.routers import sessions, robots, guide, pickup, lockbox, missions, zones, events, pois, stores, shopping, teleop
 from app.ws.manager import ws_router
+from app.utils.latency_log import get_logs, clear as clear_logs
 
 
 @asynccontextmanager
@@ -45,6 +46,16 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "malle_service"}
+
+# Debug: latency logs
+@app.get("/api/v1/debug/logs")
+async def debug_logs():
+    return {"logs": get_logs()}
+
+@app.delete("/api/v1/debug/logs")
+async def debug_logs_clear():
+    clear_logs()
+    return {"ok": True}
 
 # REST API routers
 app.include_router(sessions.router, prefix="/api/v1", tags=["sessions"])
