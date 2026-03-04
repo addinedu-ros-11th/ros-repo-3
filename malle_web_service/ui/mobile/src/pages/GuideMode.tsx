@@ -19,8 +19,8 @@ export default function GuideMode() {
     taskMission,
   } = useAppStore();
 
-  const queuedPoiIds = new Set(guideQueue.map(item => item.poiId));
-  const availablePois = pois.filter(p => !queuedPoiIds.has(p.id) && p.id > 9);
+  const queuedPoiIds = new Set(guideQueue.map(item => Number(item.poiId)));
+  const availablePois = pois.filter(p => !queuedPoiIds.has(Number(p.id)) && Number(p.id) > 9);
 
   const isActive = sessionState === 'ACTIVE';
   const isTaskMode = isActive && session.type === 'TASK' && !!taskMission;

@@ -57,6 +57,7 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  productId?: number;
 }
 
 export interface PickupOrder {

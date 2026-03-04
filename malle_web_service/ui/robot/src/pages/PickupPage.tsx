@@ -50,7 +50,7 @@ export function PickupPage() {
       if (existing) {
         return prev.map(item => item.name === product.name ? { ...item, quantity: item.quantity + 1 } : item);
       }
-      return [...prev, { name: product.name, quantity: 1, price: product.price }];
+      return [...prev, { name: product.name, quantity: 1, price: product.price, productId: product.id }];
     });
   };
 

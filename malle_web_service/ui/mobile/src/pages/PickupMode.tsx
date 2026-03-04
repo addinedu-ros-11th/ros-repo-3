@@ -44,11 +44,11 @@ export default function PickupMode() {
     return 'store';
   });
   const [selectedStore, setSelectedStore] = useState<string | null>(preStore);
-  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number }[]>(() => {
+  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number; productId?: number }[]>(() => {
     if (preStore && preItem) {
       const products = storeProductsData[preStore];
       const found = products?.find(p => p.name === preItem);
-      if (found) return [{ name: found.name, quantity: 1, price: found.price }];
+      if (found) return [{ name: found.name, quantity: 1, price: found.price, productId: found.productId }];
     }
     return [];
   });
@@ -71,14 +71,14 @@ export default function PickupMode() {
     setStep('items');
   };
 
-  const handleAddItem = (product: { name: string; price: number }) => {
+  const handleAddItem = (product: { name: string; price: number; productId?: number }) => {
     const existing = selectedItems.find(i => i.name === product.name);
     if (existing) {
       setSelectedItems(items => 
         items.map(i => i.name === product.name ? { ...i, quantity: i.quantity + 1 } : i)
       );
     } else {
-      setSelectedItems(items => [...items, { ...product, quantity: 1 }]);
+      setSelectedItems(items => [...items, { name: product.name, price: product.price, productId: product.productId, quantity: 1 }]);
     }
   };
 
@@ -410,7 +410,7 @@ export default function PickupMode() {
       {/* Item Selection */}
       {step === 'items' && selectedStore && (
         <div className="space-y-3">
-          {storeProducts[selectedStore]?.map((product) => {
+          {storeProductsData[selectedStore]?.map((product) => {
             const inCart = selectedItems.find(i => i.name === product.name);
             return (
               <div 

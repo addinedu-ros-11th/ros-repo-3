@@ -143,28 +143,17 @@ class GuideExecutor(NavCore):
             f'item_id={item_id} ({x:.3f}, {y:.3f})'
         )
 
-        self.navigate_to_pose(
-            x=x, y=y, yaw=0.0,
-            done_callback=lambda f: self._on_nav_done(f, item_id, poi_name),
+        self.navigate_via_waypoints(
+            target_x=x, target_y=y, target_yaw=0.0,
+            done_callback=lambda success: self._on_nav_done(success, item_id, poi_name),
         )
 
-    def _on_nav_done(self, future, item_id: int, poi_name: str):
-        """Nav2 액션 완료 콜백."""
-        try:
-            status = future.result().status
-        except Exception as e:
-            self._log.error(f'[GuideExecutor] 결과 수신 실패: {e}')
-            self._on_nav_failed(item_id)
-            return
-
-        # action_msgs/GoalStatus: SUCCEEDED = 4
-        if status == 4:
+    def _on_nav_done(self, success: bool, item_id: int, poi_name: str):
+        if success:
             self._log.info(f'[GuideExecutor] 도착: {poi_name}')
             self._on_arrived(item_id, poi_name)
         else:
-            self._log.warn(
-                f'[GuideExecutor] 이동 실패 status={status}: {poi_name}'
-            )
+            self._log.warn(f'[GuideExecutor] 이동 실패: {poi_name}')
             self._on_nav_failed(item_id)
 
     def _on_arrived(self, item_id: int, poi_name: str):

@@ -1,6 +1,14 @@
 # waypoint_graph.yaml
+
 # Mall-E Smart Shopping Assistant - Waypoint Configuration
 # Description: 좁은 통로(20cm) 및 충전 스테이션 진입을 위한 정밀 좌표 데이터
+
+# 통로 경유지 웨이포인트 정의
+# POI 좌표는 malle_service DB에서 가져오므로 여기엔 없음
+#
+# waypoints: 경유 포인트 좌표 (map 프레임, 미터)
+# edges:     인접 웨이포인트 연결 (양방향으로 자동 처리)
+
 
 waypoints:
   p0:      {x: 0.391, y: 0.351}

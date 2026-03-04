@@ -33,7 +33,7 @@ export interface TaskMission {
   destinationPoi?: POI;
   storeId?: string;
   storeName?: string;
-  items?: { name: string; quantity: number; price: number }[];
+  items?: { name: string; quantity: number; price: number; productId?: number }[];
 }
 
 export interface GuideDestination {
@@ -146,7 +146,7 @@ interface AppState {
   searchState: SearchState;
   stores: Store[];
   pois: POI[];
-  storeProducts: Record<string, { name: string; option: string; price: number }[]>;
+  storeProducts: Record<string, { name: string; option: string; price: number; productId: number }[]>;
 
   initFromServer: () => Promise<void>;
 
@@ -173,7 +173,7 @@ interface AppState {
   stopFollowMe: () => void;
   setFollowStatus: (status: FollowStatus) => void;
 
-  createPickupOrder: (storeId: string, items: { name: string; quantity: number; price: number }[]) => void;
+  createPickupOrder: (storeId: string, items: { name: string; quantity: number; price: number; productId?: number }[]) => void;
   setPickupStatus: (status: PickupStatus) => void;
   setMeetupLocation: (location: string) => void;
 
@@ -303,7 +303,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (pr?.length) u.pois = pr.map(mapPoi);
 
       if (sr?.length) {
-        const productsMap: Record<string, { name: string; option: string; price: number }[]> = {};
+        const productsMap: Record<string, { name: string; option: string; price: number; productId: number }[]> = {};
         const results = await Promise.all(
           sr.map(s => storeApi.getProducts(s.id).catch(() => null))
         );
@@ -314,6 +314,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               name: p.name,
               option: p.sku || '',
               price: p.price,
+              productId: p.id,
             }));
           }
         });
@@ -516,7 +517,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       pickupApi.create(state.currentSessionId, {
         pickup_poi_id: store?.poi_id ?? Number(storeId),
         created_channel: 'APP',
-        items: items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
+        items: items.map((it) => ({
+            product_id: it.productId ?? 0,  // ← i + 1 대신
+            qty: it.quantity,
+            unit_price: it.price,
+        })),
       }).then((res) => {
         // 서버 ID 저장 (meetup API 호출용)
         useAppStore.setState((s) => ({
