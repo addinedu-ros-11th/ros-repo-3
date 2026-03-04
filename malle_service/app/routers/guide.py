@@ -15,6 +15,8 @@ from app.models.poi import Poi
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.utils.bridge import send_to_bridge
+from app.models.robot import RobotStateCurrent
+from app.services.robot_dispatcher import get_occupied_poi_ids
 
 router = APIRouter()
 
@@ -239,6 +241,23 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
     queue = await _get_queue(db, session_id)
     first_item = pending[0]
     poi = await db.get(Poi, first_item.poi_id)
+
+    occupied = await get_occupied_poi_ids(db, exclude_robot_id=session.assigned_robot_id)
+    if first_item.poi_id in occupied:
+        raise HTTPException(
+            status_code=409,
+            detail="Target POI is currently occupied by another robot in a narrow section",
+        )
+
+    robot_state_result = await db.execute(
+        select(RobotStateCurrent).where(
+            RobotStateCurrent.robot_id == session.assigned_robot_id
+        )
+    )
+    robot_state = robot_state_result.scalar_one_or_none()
+    if robot_state:
+        robot_state.target_poi_id = first_item.poi_id
+    await db.flush()
 
     await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_NAVIGATING, {
         "item_id": first_item.id,

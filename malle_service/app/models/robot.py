@@ -28,6 +28,7 @@ class RobotNavState(str, PyEnum):
     ARRIVED = "ARRIVED"
     RECOVERY = "RECOVERY"
     TELEOP = "TELEOP"
+    OCCUPIED = "OCCUPIED"       # PID 구간 점유 중
 
 
 class RobotStopState(str, PyEnum):

@@ -25,6 +25,7 @@ CORS_ORIGINS: list[str] = os.getenv(
 
 # --- Internal services ---
 AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://localhost:5000")
+BRIDGE_BASE_URL: str = os.getenv("BRIDGE_BASE_URL", "http://localhost:9100")
 
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")

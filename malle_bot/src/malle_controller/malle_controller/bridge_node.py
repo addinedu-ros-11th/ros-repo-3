@@ -44,6 +44,8 @@ TOPIC_BATTERY        = _topic("battery/present")
 TOPIC_CMD_VEL_TELEOP = _topic("cmd_vel_teleop")
 TOPIC_PREEMPT_TELEOP = _topic("preempt_teleop")
 TOPIC_TASK_COMMAND   = _topic("task_command")
+TOPIC_NAV_MODE           = _topic("nav_mode")
+TOPIC_OCCUPIED_POI_IDS   = _topic("occupied_poi_ids")
 
 JPEG_QUALITY   = 70
 STREAM_MAX_FPS = 15
@@ -315,19 +317,23 @@ if HAS_ROS2:
             self._teleop_active = False
             self._state = {
                 "x_m": 0.0, "y_m": 0.0, "theta_rad": 0.0,
-                "speed_mps": 0.0, "battery_pct": 100,
+                "speed_mps": 0.0, "battery_pct": 100, "nav_state": "IDLE",
             }
 
             self.create_subscription(Odometry, TOPIC_ODOM, self._odom_cb, 10)
             self.create_subscription(Float32, TOPIC_BATTERY, self._battery_cb, 10)
+            self.create_subscription(String, TOPIC_NAV_MODE, self._nav_mode_cb, 10)
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
+            self.get_logger().info(f"  nav_mode: {TOPIC_NAV_MODE}")
 
             self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
             self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
+            self._occupied_poi_pub = self.create_publisher(String, TOPIC_OCCUPIED_POI_IDS, 10)
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
+            self.create_timer(1.0, self._push_occupied_poi_ids)
             self.get_logger().info("Bridge ready.")
 
         def _odom_cb(self, msg: Odometry):
@@ -349,6 +355,28 @@ if HAS_ROS2:
         def _battery_cb(self, msg: Float32):
             self._state["battery_pct"] = int(msg.data)
 
+        def _nav_mode_cb(self, msg: String):
+            mode = msg.data.strip().upper()
+            mapping = {"PID": "OCCUPIED", "NAV2": "MOVING", "IDLE": "IDLE"}
+            self._state["nav_state"] = mapping.get(mode, "IDLE")
+
+        def _push_occupied_poi_ids(self):
+            """다른 로봇이 점유 중인 POI ID 목록을 malle_service에서 받아 토픽으로 발행."""
+            try:
+                r = self._http_client.get(
+                    f"{MALLE_SERVICE_URL}/api/v1/robots/occupied-poi-ids",
+                    params={"exclude_robot_id": ROBOT_ID},
+                )
+                if r.status_code == 200:
+                    ids = r.json().get("poi_ids", [])
+                    msg = String()
+                    msg.data = ",".join(str(i) for i in ids)
+                    self._occupied_poi_pub.publish(msg)
+            except httpx.ConnectError:
+                pass
+            except Exception as e:
+                self.get_logger().warning(f"Occupied POI fetch failed: {e}")
+
         def _push_state(self):
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
             try:
@@ -361,6 +389,7 @@ if HAS_ROS2:
                         "speed_mps":    self._state["speed_mps"],
                         "battery_pct":  self._state["battery_pct"],
                         "motion_state": motion,
+                        "nav_state":    self._state["nav_state"],
                     },
                 )
             except httpx.ConnectError:
