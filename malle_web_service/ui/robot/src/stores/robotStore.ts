@@ -19,15 +19,20 @@ import type {
   VoiceIntentResult,
 } from '@/types/robot';
 import { parseVoiceCommand, resolveStoreName } from '@/lib/voiceParser';
-import { stores, getProductsByStore } from '@/data/stores';
 import { sessionApi } from '@/api/sessions';
 import { guideApi } from '@/api/guide';
-import { pickupApi, lockboxApi, type LockboxSlotRes } from '@/api/services';
+import { pickupApi, lockboxApi, storeApi, type LockboxSlotRes, type StoreRes } from '@/api/services';
 
 interface RobotStore {
   // ★ Server IDs
   currentSessionId: number | null;
   currentRobotId: number | null;
+
+  // store name → pois.id 매핑 (서버 /stores에서 로드, pickup_poi_id 사용)
+  storePoiMap: Record<string, number>;
+  // 서버에서 로드한 전체 매장 목록 (PickupPage, SearchPage에서 사용)
+  storeList: StoreRes[];
+  initStoresFromServer: () => Promise<void>;
 
   // Robot State
   sessionState: SessionState;
@@ -92,6 +97,7 @@ interface RobotStore {
   setPickupStatus: (status: PickupOrder['status']) => void;
   completePickup: () => void;
   setShowLoadingOverlay: (show: boolean) => void;
+  markPickupLoaded: () => Promise<void>;
 
   // Actions - Lockbox
   setSlotStatus: (slotNumber: number, status: LockboxSlot['status'], orderInfo?: LockboxSlot['orderInfo']) => void;
@@ -99,6 +105,7 @@ interface RobotStore {
   openSlot: (slotNumber: number) => void;
   updateSlotStatus: (slotNumber: number, status: LockboxSlot['status']) => void;
   initLockboxSlots: () => void;
+  _resetOnSessionEnded: () => void;
   _setLockboxSlotsFromServer: (slots: LockboxSlotRes[]) => void;
   _onLockboxOpened: (slotNo: number) => void;
 
@@ -131,12 +138,39 @@ const initialRobot: Robot = {
   status: 'IDLE',
 };
 
-
 const initialNotifications: Notification[] = [
-  { id: '1', category: 'NAVIGATION', title: 'Arrived at Zara', description: 'Waiting for customer', timestamp: new Date(Date.now() - 30 * 60000), read: false },
-  { id: '2', category: 'LOCKBOX', title: 'Slot 2 Opened', description: 'Successful retrieval', timestamp: new Date(Date.now() - 45 * 60000), read: true },
-  { id: '3', category: 'PICKUP', title: 'New Pickup Order', description: 'Order #8821 from Zara', timestamp: new Date(Date.now() - 60 * 60000), read: true },
-  { id: '4', category: 'SYSTEM', title: 'Battery Low Warning', description: 'Battery at 25%', timestamp: new Date(Date.now() - 75 * 60000), read: true },
+  {
+    id: '1',
+    category: 'NAVIGATION',
+    title: 'Arrived at Zara',
+    description: 'Waiting for customer',
+    timestamp: new Date(Date.now() - 30 * 60000),
+    read: false,
+  },
+  {
+    id: '2',
+    category: 'LOCKBOX',
+    title: 'Slot 2 Opened',
+    description: 'Successful retrieval',
+    timestamp: new Date(Date.now() - 45 * 60000),
+    read: true,
+  },
+  {
+    id: '3',
+    category: 'PICKUP',
+    title: 'New Pickup Order',
+    description: 'Order #8821 from Zara',
+    timestamp: new Date(Date.now() - 60 * 60000),
+    read: true,
+  },
+  {
+    id: '4',
+    category: 'SYSTEM',
+    title: 'Battery Low Warning',
+    description: 'Battery at 25%',
+    timestamp: new Date(Date.now() - 75 * 60000),
+    read: true,
+  },
 ];
 
 /* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
@@ -155,6 +189,8 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   // ★ Server IDs
   currentSessionId: null,
   currentRobotId: null,
+  storePoiMap: {},
+  storeList: [],
 
   // Initial State
   sessionState: 'INACTIVE',
@@ -175,48 +211,65 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
   pendingLockboxSlot: null,
   pendingPickupStore: null,
 
+  // ── Server Store Init ────────────────────────────────────────────────────
+
+  initStoresFromServer: async () => {
+    try {
+      const serverStores = await storeApi.list();
+      const map: Record<string, number> = {};
+      for (const s of serverStores) {
+        if (s.name && s.poi_id) map[s.name] = s.poi_id;
+      }
+      set({ storePoiMap: map, storeList: serverStores });
+    } catch {
+      /* 로컬 데이터로 fallback */
+    }
+  },
+
   // ── Session ──────────────────────────────────────────────────────────────
 
   setSessionState: (state) => set({ sessionState: state }),
 
-  startSession: (type, remainingTime, customerName) => set({
-    sessionState: 'ACTIVE',
-    session: { type, remainingTime, customerId: 'customer-1', customerName },
-    sessionTime: 0,
-    showPinOverlay: false,
-  }),
+  startSession: (type, remainingTime, customerName) =>
+    set({
+      sessionState: 'ACTIVE',
+      session: { type, remainingTime, customerId: 'customer-1', customerName },
+      sessionTime: 0,
+      showPinOverlay: false,
+    }),
 
   endSession: async () => {
-      const { currentSessionId } = get();
-      try {
-        if (currentSessionId) {
-          await sessionApi.end(currentSessionId);
-          // ★ resetAll 제거 — 서버 end_session이 락박스 초기화 + LOCKBOX_UPDATED 브로드캐스트함
-        }
-      } catch (e) {
-        console.error('Session end failed', e);
+    const { currentSessionId } = get();
+    try {
+      if (currentSessionId) {
+        await sessionApi.end(currentSessionId);
+        // ★ resetAll 제거 — 서버 end_session이 락박스 초기화 + LOCKBOX_UPDATED 브로드캐스트함
       }
-      set({
-        sessionState: 'INACTIVE',
-        session: null,
-        activeMode: null,
-        sessionTime: 0,
-        guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
-        follow: { active: false, tagNumber: null, status: 'STOPPED' },
-        pickup: { currentOrder: null, showLoadingOverlay: false },
-        currentSessionId: null,
-        lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
-        lockboxLogs: [],
-      });
+    } catch (e) {
+      console.error('Session end failed', e);
+    }
+    set({
+      sessionState: 'INACTIVE',
+      session: null,
+      activeMode: null,
+      sessionTime: 0,
+      guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
+      follow: { active: false, tagNumber: null, status: 'STOPPED' },
+      pickup: { currentOrder: null, showLoadingOverlay: false },
+      currentSessionId: null,
+      lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
+      lockboxLogs: [],
+    });
   },
 
   incrementSessionTime: () => set((state) => ({ sessionTime: state.sessionTime + 1 })),
 
-  decrementRemainingTime: () => set((state) => ({
-    session: state.session
-      ? { ...state.session, remainingTime: Math.max(0, state.session.remainingTime - 1) }
-      : null,
-  })),
+  decrementRemainingTime: () =>
+    set((state) => ({
+      session: state.session
+        ? { ...state.session, remainingTime: Math.max(0, state.session.remainingTime - 1) }
+        : null,
+    })),
 
   // ── Robot ────────────────────────────────────────────────────────────────
 
@@ -234,26 +287,28 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     set((state) => ({
       guide: {
         ...state.guide,
-        queue: [...state.guide.queue, {
-          ...item,
-          id: localId,
-          serverItemId: null,  // API 응답 후 채움
-          status: 'PENDING',
-          selected: true,
-        }],
+        queue: [
+          ...state.guide.queue,
+          {
+            ...item,
+            id: localId,
+            serverItemId: null, // API 응답 후 채움
+            status: 'PENDING',
+            selected: true,
+          },
+        ],
       },
     }));
     // poi_id는 poiId 필드에서 숫자로 변환
     const { currentSessionId } = get();
     if (currentSessionId && item.poiId) {
-      guideApi.addToQueue(currentSessionId, Number(item.poiId))
+      guideApi
+        .addToQueue(currentSessionId, Number(item.poiId))
         .then((res) => {
           set((state) => ({
             guide: {
               ...state.guide,
-              queue: state.guide.queue.map((q) =>
-                q.id === localId ? { ...q, serverItemId: res.id } : q
-              ),
+              queue: state.guide.queue.map((q) => (q.id === localId ? { ...q, serverItemId: res.id } : q)),
             },
           }));
         })
@@ -279,18 +334,18 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     if (currentSessionId) guideApi.clear(currentSessionId).catch(() => {});
   },
 
-  toggleGuideItemSelection: (id) => set((state) => ({
-    guide: {
-      ...state.guide,
-      queue: state.guide.queue.map((item) =>
-        item.id === id ? { ...item, selected: !item.selected } : item
-      ),
-    },
-  })),
+  toggleGuideItemSelection: (id) =>
+    set((state) => ({
+      guide: {
+        ...state.guide,
+        queue: state.guide.queue.map((item) => (item.id === id ? { ...item, selected: !item.selected } : item)),
+      },
+    })),
 
-  selectAllGuideItems: (selected) => set((state) => ({
-    guide: { ...state.guide, queue: state.guide.queue.map((item) => ({ ...item, selected })) },
-  })),
+  selectAllGuideItems: (selected) =>
+    set((state) => ({
+      guide: { ...state.guide, queue: state.guide.queue.map((item) => ({ ...item, selected })) },
+    })),
 
   startGuide: () => {
     const state = get();
@@ -300,45 +355,63 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     if (state.currentSessionId) guideApi.execute(state.currentSessionId).catch(() => {});
   },
 
-  stopGuide: () => set((state) => ({
-    activeMode: null,
-    guide: { ...state.guide, isExecuting: false, currentDestinationIndex: 0 },
-  })),
+  stopGuide: () =>
+    set((state) => ({
+      activeMode: null,
+      guide: { ...state.guide, isExecuting: false, currentDestinationIndex: 0 },
+    })),
 
-  advanceGuide: () => set((state) => {
-    const selectedItems = state.guide.queue.filter((item) => item.selected);
-    const nextIndex = state.guide.currentDestinationIndex + 1;
-    if (nextIndex >= selectedItems.length) {
-      return { activeMode: null, guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 } };
+  advanceGuide: () =>
+    set((state) => {
+      const selectedItems = state.guide.queue.filter((item) => item.selected);
+      const nextIndex = state.guide.currentDestinationIndex + 1;
+      if (nextIndex >= selectedItems.length) {
+        return { activeMode: null, guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 } };
+      }
+      return { guide: { ...state.guide, currentDestinationIndex: nextIndex } };
+    }),
+
+  setGuideItemStatus: (id, status) =>
+    set((state) => ({
+      guide: {
+        ...state.guide,
+        queue: state.guide.queue.map((item) => (item.id === id ? { ...item, status } : item)),
+      },
+    })),
+
+  markPickupLoaded: async () => {
+    const state = get();
+    const sessionId = state.currentSessionId;
+    const current = state.pickup.currentOrder as any;
+    const serverOrderId = current?.serverOrderId;
+
+    if (!sessionId || !serverOrderId) return;
+
+    try {
+      await pickupApi.updateStatus(sessionId, serverOrderId, 'LOADED');
+      get().setPickupStatus('LOADED');
+    } catch (e) {
+      console.error('[Pickup] Failed to mark LOADED:', e);
     }
-    return { guide: { ...state.guide, currentDestinationIndex: nextIndex } };
-  }),
-
-  setGuideItemStatus: (id, status) => set((state) => ({
-    guide: {
-      ...state.guide,
-      queue: state.guide.queue.map((item) => item.id === id ? { ...item, status } : item),
-    },
-  })),
+  },
 
   // ★ WS-driven: 서버 큐와 로컬 낙관적 항목 병합
-  _setGuideQueueFromServer: (serverQueue) => set((state) => {
-    // 서버 큐에 이미 반영된 poiId 집합
-    const serverPoiIds = new Set(serverQueue.map((i) => i.poiId));
+  _setGuideQueueFromServer: (serverQueue) =>
+    set((state) => {
+      // 서버 큐에 이미 반영된 poiId 집합
+      const serverPoiIds = new Set(serverQueue.map((i) => i.poiId));
 
-    // serverItemId === null이고 서버 큐에 없는 poiId의 낙관적 항목만 유지
-    const pendingOptimistic = state.guide.queue.filter(
-      (i) => i.serverItemId === null && !serverPoiIds.has(i.poiId)
-    );
+      // serverItemId === null이고 서버 큐에 없는 poiId의 낙관적 항목만 유지
+      const pendingOptimistic = state.guide.queue.filter((i) => i.serverItemId === null && !serverPoiIds.has(i.poiId));
 
-    // 서버 큐 항목에 기존 선택 상태 병합
-    const mergedServerItems = serverQueue.map((serverItem) => {
-      const existing = state.guide.queue.find((i) => i.serverItemId === serverItem.serverItemId);
-      return existing ? { ...serverItem, selected: existing.selected } : serverItem;
-    });
+      // 서버 큐 항목에 기존 선택 상태 병합
+      const mergedServerItems = serverQueue.map((serverItem) => {
+        const existing = state.guide.queue.find((i) => i.serverItemId === serverItem.serverItemId);
+        return existing ? { ...serverItem, selected: existing.selected } : serverItem;
+      });
 
-    return { guide: { ...state.guide, queue: [...mergedServerItems, ...pendingOptimistic] } };
-  }),
+      return { guide: { ...state.guide, queue: [...mergedServerItems, ...pendingOptimistic] } };
+    }),
 
   // ── Follow ───────────────────────────────────────────────────────────────
 
@@ -354,11 +427,12 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     }
   },
 
-  stopFollow: () => set((state) => ({
-    activeMode: null,
-    follow: { active: false, tagNumber: null, status: 'STOPPED' },
-    robot: { ...state.robot, status: 'IDLE' },
-  })),
+  stopFollow: () =>
+    set((state) => ({
+      activeMode: null,
+      follow: { active: false, tagNumber: null, status: 'STOPPED' },
+      robot: { ...state.robot, status: 'IDLE' },
+    })),
 
   setFollowStatus: (status) => set((state) => ({ follow: { ...state.follow, status } })),
   changeFollowTag: (tagNumber) => set((state) => ({ follow: { ...state.follow, tagNumber } })),
@@ -377,68 +451,104 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
       pickup: { currentOrder: { ...order, status: 'MOVING', slotId: slotNumber }, showLoadingOverlay: false },
       lockboxSlots: state.lockboxSlots.map((slot, i) =>
         i === emptySlotIndex
-          ? { ...slot, status: 'RESERVED' as const, orderInfo: { orderId: order.orderId, storeName: order.storeName, customerName: 'Customer' } }
+          ? {
+              ...slot,
+              status: 'RESERVED' as const,
+              orderInfo: { orderId: order.orderId, storeName: order.storeName, customerName: 'Customer' },
+            }
           : slot
       ),
     }));
 
     if (state.currentSessionId) {
-      pickupApi.create(state.currentSessionId, {
-        pickup_poi_id: 1, // TODO: store → poi_id 매핑
-        created_channel: 'ROBOT',
-        items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
-      }).catch(() => {});
+      // storePoiMap: 서버 /stores에서 로드한 store name → pois.id 매핑
+      const pickup_poi_id = state.storePoiMap[order.storeName];
+      if (pickup_poi_id) {
+        pickupApi
+          .create(state.currentSessionId, {
+            pickup_poi_id,
+            created_channel: 'ROBOT',
+            items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
+          })
+          .then((res) => {
+            set((s) => ({
+              pickup: s.pickup.currentOrder
+                ? { ...s.pickup, currentOrder: { ...s.pickup.currentOrder, serverOrderId: res.id } as any }
+                : s.pickup,
+            }));
+          })
+          .catch(() => {});
+      }
     }
   },
 
-  setPickupStatus: (status) => set((state) => ({
-    pickup: state.pickup.currentOrder
-      ? { ...state.pickup, currentOrder: { ...state.pickup.currentOrder, status } }
-      : state.pickup,
-  })),
+  setPickupStatus: (incomingStatus) =>
+    set((state) => {
+      const order = state.pickup.currentOrder;
+      if (!order) return { pickup: state.pickup };
+
+      // 1) 주문 상태 업데이트
+      const pickup: PickupState = {
+        ...state.pickup,
+        currentOrder: { ...order, status: incomingStatus },
+      };
+
+      // 2) LOADED 이벤트 들어오면 슬롯 상태 동기화
+      let lockboxSlots = state.lockboxSlots;
+      if (incomingStatus === 'LOADED') {
+        lockboxSlots = state.lockboxSlots.map((slot) => {
+          if (slot.number !== order.slotId) return slot;
+          if (slot.status !== 'RESERVED') return slot;
+
+          return {
+            ...slot,
+            status: 'PICKEDUP',
+            pickedUp: true,
+          };
+        });
+      }
+
+      return { pickup, lockboxSlots };
+    }),
 
   completePickup: () => {
-    const state = get();
-    if (!state.pickup.currentOrder) return;
-    const slotNumber = state.pickup.currentOrder.slotId;
     set((state) => ({
       activeMode: null,
       robot: { ...state.robot, status: 'IDLE' },
       pickup: { currentOrder: null, showLoadingOverlay: false },
-      lockboxSlots: state.lockboxSlots.map((slot) =>
-        slot.number === slotNumber
-          ? { ...slot, status: 'FULL' as const, isPickupOrder: true, pickedUp: true, occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
-          : slot
-      ),
     }));
   },
 
-  setShowLoadingOverlay: (show) => set((state) => ({
-    pickup: { ...state.pickup, showLoadingOverlay: show },
-  })),
+  setShowLoadingOverlay: (show) =>
+    set((state) => ({
+      pickup: { ...state.pickup, showLoadingOverlay: show },
+    })),
 
   // ── Lockbox ──────────────────────────────────────────────────────────────
 
-  setSlotStatus: (slotNumber, status, orderInfo) => set((state) => ({
-    lockboxSlots: state.lockboxSlots.map((slot) =>
-      slot.number === slotNumber
-        ? {
-            ...slot,
-            status,
-            orderInfo: orderInfo ?? (status === 'EMPTY' ? undefined : slot.orderInfo),
-            occupiedSince: status === 'FULL'
-              ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : undefined,
-            isPickupOrder: status === 'RESERVED' ? true : status === 'EMPTY' ? false : (orderInfo ? true : false),
-            pickedUp: false,
-          }
-        : slot
-    ),
-  })),
+  setSlotStatus: (slotNumber, status, orderInfo) =>
+    set((state) => ({
+      lockboxSlots: state.lockboxSlots.map((slot) =>
+        slot.number === slotNumber
+          ? {
+              ...slot,
+              status,
+              orderInfo: orderInfo ?? (status === 'EMPTY' ? undefined : slot.orderInfo),
+              occupiedSince:
+                status === 'FULL'
+                  ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : undefined,
+              isPickupOrder: status === 'RESERVED' ? true : status === 'EMPTY' ? false : orderInfo ? true : false,
+              pickedUp: false,
+            }
+          : slot
+      ),
+    })),
 
-  addLockboxLog: (log) => set((state) => ({
-    lockboxLogs: [{ ...log, id: crypto.randomUUID() }, ...state.lockboxLogs].slice(0, 20),
-  })),
+  addLockboxLog: (log) =>
+    set((state) => ({
+      lockboxLogs: [{ ...log, id: crypto.randomUUID() }, ...state.lockboxLogs].slice(0, 20),
+    })),
 
   openSlot: (slotNumber) => {
     const state = get();
@@ -455,7 +565,20 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
 
   updateSlotStatus: (slotNumber, status) => {
     const state = get();
-    state.setSlotStatus(slotNumber, status);
+    // FULL로 바꿀 때 orderInfo 클리어 (PICKEDUP → 고객이 다시 넣은 물건은 새 보관)
+    if (status === 'FULL') {
+      state.setSlotStatus(slotNumber, status, { orderId: '', storeName: '', customerName: '' });
+      set((s) => ({
+        lockboxSlots: s.lockboxSlots.map((sl) =>
+          sl.number === slotNumber
+            ? { ...sl, status: 'FULL', orderInfo: undefined, isPickupOrder: false, pickedUp: false,
+                occupiedSince: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+            : sl
+        ),
+      }));
+    } else {
+      state.setSlotStatus(slotNumber, status);
+    }
     const robotId = state.currentRobotId ?? Number(state.robot.id);
     if (robotId) lockboxApi.updateSlotStatus(robotId, slotNumber, status).catch(() => {});
   },
@@ -465,27 +588,57 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
     const robotId = state.currentRobotId ?? Number(state.robot.id);
     if (!robotId) return;
 
-    // 🔥 1. 먼저 완전 초기화
+    // 1. 먼저 완전 초기화
     set({
       lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
       lockboxLogs: [],
     });
 
+    // 2. 서버에서 실제 슬롯 상태 조회
+    lockboxApi
+      .getSlots(robotId)
+      .then((slots) => useRobotStore.getState()._setLockboxSlotsFromServer(slots))
+      .catch(() => {});
   },
 
-  _setLockboxSlotsFromServer: (serverSlots) => set((state) => ({
-    lockboxSlots: serverSlots.map((s) => {
-      const existing = state.lockboxSlots.find((sl) => sl.number === s.slot_no);
-      return {
-        number: s.slot_no as 1 | 2 | 3 | 4 | 5,
-        status: (s.status === 'PICKEDUP' ? 'FULL' : s.status) as LockboxSlot['status'],
-        occupiedSince: existing?.occupiedSince,
-        orderInfo: existing?.orderInfo,
-        isPickupOrder: existing?.isPickupOrder,
-        pickedUp: s.status === 'PICKEDUP' ? true : (existing?.pickedUp ?? false),
-      };
-    }),
-  })),
+  // WS SESSION_ENDED 수신 시 사용 — API 재호출 없이 상태만 초기화
+  _resetOnSessionEnded: () => {
+    set({
+      sessionState: 'INACTIVE',
+      session: null,
+      activeMode: null,
+      sessionTime: 0,
+      guide: { queue: [], isExecuting: false, currentDestinationIndex: 0 },
+      follow: { active: false, tagNumber: null, status: 'STOPPED' },
+      pickup: { currentOrder: null, showLoadingOverlay: false },
+      currentSessionId: null,
+      lockboxSlots: initialLockboxSlots.map((s) => ({ ...s })),
+      lockboxLogs: [],
+    });
+  },
+
+  _setLockboxSlotsFromServer: (serverSlots) =>
+    set((state) => ({
+      lockboxSlots: serverSlots.map((s) => {
+        const existing = state.lockboxSlots.find((sl) => sl.number === s.slot_no);
+        let newOrderInfo = existing?.orderInfo;
+        if (s.order_id != null) {
+          newOrderInfo = {
+            orderId: `#${s.order_id}`,
+            storeName: s.store_name ?? existing?.orderInfo?.storeName ?? '',
+            customerName: existing?.orderInfo?.customerName ?? '',
+          };
+        }
+        return {
+          number: s.slot_no as 1 | 2 | 3 | 4 | 5,
+          status: s.status as LockboxSlot['status'],
+          occupiedSince: existing?.occupiedSince,
+          orderInfo: newOrderInfo,
+          isPickupOrder: s.order_id != null ? true : existing?.isPickupOrder ?? false,
+          pickedUp: s.status === 'PICKEDUP' ? true : existing?.pickedUp ?? false,
+        };
+      }),
+    })),
 
   _onLockboxOpened: (slotNo) => {
     get().addLockboxLog({
@@ -499,24 +652,28 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
 
   // ── Notifications ────────────────────────────────────────────────────────
 
-  addNotification: (notification) => set((state) => ({
-    notifications: [
-      { ...notification, id: crypto.randomUUID(), timestamp: new Date(), read: false },
-      ...state.notifications,
-    ].slice(0, 50),
-  })),
+  addNotification: (notification) =>
+    set((state) => ({
+      notifications: [
+        { ...notification, id: crypto.randomUUID(), timestamp: new Date(), read: false },
+        ...state.notifications,
+      ].slice(0, 50),
+    })),
 
-  markNotificationRead: (id) => set((state) => ({
-    notifications: state.notifications.map((n) => n.id === id ? { ...n, read: true } : n),
-  })),
+  markNotificationRead: (id) =>
+    set((state) => ({
+      notifications: state.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),
+    })),
 
-  markAllNotificationsRead: () => set((state) => ({
-    notifications: state.notifications.map((n) => ({ ...n, read: true })),
-  })),
+  markAllNotificationsRead: () =>
+    set((state) => ({
+      notifications: state.notifications.map((n) => ({ ...n, read: true })),
+    })),
 
-  toggleNotificationPanel: () => set((state) => ({
-    notificationPanelOpen: !state.notificationPanelOpen,
-  })),
+  toggleNotificationPanel: () =>
+    set((state) => ({
+      notificationPanelOpen: !state.notificationPanelOpen,
+    })),
 
   // ── PIN ──────────────────────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ import { useRobotStore } from '@/stores/robotStore';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { FollowTag, FollowStatus } from '@/types/robot';
+import { api } from '@/api/client';
 
 export function FollowPage() {
   const { follow, startFollow, stopFollow, setFollowStatus, changeFollowTag } = useRobotStore();
@@ -9,18 +10,32 @@ export function FollowPage() {
   const [showTagDialog, setShowTagDialog] = useState(!follow.active);
   const [selectedTag, setSelectedTag] = useState<FollowTag>(11);
 
-  const handleStartFollow = () => {
-    startFollow(selectedTag);
-    setShowTagDialog(false);
+  const handleStartFollow = async () => {
+      startFollow(selectedTag);
+      setShowTagDialog(false);
+      const { currentSessionId } = useRobotStore.getState();
+      if (currentSessionId) {
+          await api.patch(`/sessions/${currentSessionId}/follow-tag`, {
+              tag_code: selectedTag,
+              tag_family: 'tag36h11',
+          }).catch(() => {});
+      }
   };
 
   const handleChangeTag = () => {
     setShowTagDialog(true);
   };
 
-  const handleConfirmTagChange = () => {
-    changeFollowTag(selectedTag);
-    setShowTagDialog(false);
+  const handleConfirmTagChange = async () => {
+      changeFollowTag(selectedTag);
+      setShowTagDialog(false);
+      const { currentSessionId } = useRobotStore.getState();
+      if (currentSessionId) {
+          await api.patch(`/sessions/${currentSessionId}/follow-tag`, {
+              tag_code: selectedTag,
+              tag_family: 'tag36h11',
+          }).catch(() => {});
+      }
   };
 
   const getStatusColor = (status: FollowStatus) => {
@@ -98,7 +113,13 @@ export function FollowPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-page-title">Follow Me Mode</h1>
-        <button onClick={stopFollow} className="btn-danger">
+        <button onClick={async () => {
+          stopFollow();
+          const { currentSessionId } = useRobotStore.getState();
+          if (currentSessionId) {
+            await api.post(`/sessions/${currentSessionId}/follow/stop`, {}).catch(() => {});
+          }
+        }} className="btn-danger">
           <span className="material-icons-round mr-2 align-middle">stop</span>
           Stop Following
         </button>
