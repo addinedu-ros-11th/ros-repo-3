@@ -1,9 +1,14 @@
 # waypoint_graph.yaml
+
+# Mall-E Smart Shopping Assistant - Waypoint Configuration
+# Description: 좁은 통로(20cm) 및 충전 스테이션 진입을 위한 정밀 좌표 데이터
+
 # 통로 경유지 웨이포인트 정의
 # POI 좌표는 malle_service DB에서 가져오므로 여기엔 없음
 #
 # waypoints: 경유 포인트 좌표 (map 프레임, 미터)
 # edges:     인접 웨이포인트 연결 (양방향으로 자동 처리)
+
 
 waypoints:
   p0:      {x: 0.391, y: 0.351}
@@ -30,23 +35,23 @@ waypoints:
   p11_1:   {x: 1.804, y: 1.700}
 
 edges:
-  p0:    [p1, charger1, charger2]
-  p1:    [p0, p2_1, p13]
-  p2:    [p1, p3, p2_1]
-  p3:    [p2, p4, p7]
-  p4:    [p3, p5, p13]
-  p5:    [p4, p6]
-  p6:    [p5, p8, p15]
-  p7:    [p3_1, p4]
-  p8:    [p6, p9, p16]
-  p9:    [p8]
-  p10:   [p7, p15]
-  p11:   [p3]
-  p12:   [p13, p14]
-  p13:   [p1, p12, p4]
-  p14:   [p12, p16]
-  p15:   [p6, p11_1, p10]
-  p16:   [p8, p14]
-  p2_1:  [p3_1, p1]
-  p3_1:  [p11_1, p7]
-  p11_1: [p15, p3_1, p11]
+  p0:      [p1, charger1, charger2]
+  p1:      [p0, p2_1, p13]
+  p2:      [p1, p3, p2_1]
+  p3:      [p2, p4, p7]
+  p4:      [p3, p5, p13]
+  p5:      [p4, p6]
+  p6:      [p5, p8, p15]
+  p7:      [p3_1, p4]
+  p8:      [p6, p9, p16]
+  p9:      [p8]
+  p10:     [p7, p15]
+  p11:     [p3]
+  p12:     [p13, p14]
+  p13:     [p1, p12, p4]
+  p14:     [p12, p16]
+  p15:     [p6, p11_1, p10]
+  p16:     [p8, p14]
+  p2_1:    [p3_1, p1]
+  p3_1:    [p11_1, p7]
+  p11_1:   [p15, p3_1, p11]

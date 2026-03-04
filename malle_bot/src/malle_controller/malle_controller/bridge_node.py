@@ -93,6 +93,12 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────
+# 전역 참조 (main()에서 주입)
+# ─────────────────────────────────────────────────────────────
+_ros_node = None
+_mission_executor = None
+
+# ─────────────────────────────────────────────────────────────
 # Camera frame buffer
 # ─────────────────────────────────────────────────────────────
 
@@ -193,9 +199,7 @@ if HAS_FASTAPI:
             _ros_node.publish_trigger("idle")
         return {"ok": True}
 
-    # 전역 참조 (main()에서 주입)
-    _ros_node: Optional["BridgeNode"] = None
-    _mission_executor = None
+    # 전역 참조는 모듈 최상위로 이동 (아래 참조)
 
     @bridge_app.get("/health")
     async def health():

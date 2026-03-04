@@ -13,11 +13,48 @@ from nav2_msgs.action import NavigateToPose
 
 import ament_index_python.packages as ament
 
-ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "")
+# 네비게이션 상수
+MAX_LINEAR_VEL      = 0.15          # PID 최대 선속도 (m/s)
+MAX_ANGULAR_VEL     = 1.0           # PID 최대 각속도 (rad/s)
+ROTATE_FIRST_ANGLE  = math.radians(30)  # 이 각도 이상이면 제자리 회전 우선 (rad)
+ZONE_CHECK_PERIOD   = 0.1           # zone 체크 타이머 주기 (s)
+PID_PERIOD          = 0.02          # PID 루프 타이머 주기 (s)
+NAV_RETRY_MAX       = 1             # Nav2 실패 시 최대 재시도 횟수
 
-def _ns(name: str) -> str:
-    return f"/{ROBOT_NAMESPACE}/{name.lstrip('/')}" if ROBOT_NAMESPACE else f"/{name.lstrip('/')}"
 
+# ─────────────────────────────────────────────────────────────
+# Waypoint Graph Loader
+# ─────────────────────────────────────────────────────────────
+
+def _load_waypoint_graph(yaml_path: str | None = None) -> tuple[dict, dict]:
+    """
+    waypoint_graph.yaml 로드.
+
+    Returns:
+        points: { wp_id: {"x": float, "y": float} }
+        edges:  { wp_id: [wp_id, ...] }  (단방향 — BFS에서 양방향 취급)
+    """
+    if yaml_path is None:
+        yaml_path = os.path.join(
+            os.path.dirname(__file__), '..', 'config', 'waypoint_graph.yaml'
+        )
+
+    try:
+        import yaml
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        points = {k: {"x": float(v["x"]), "y": float(v["y"])}
+                  for k, v in data.get("waypoints", {}).items()}
+        edges = {k: list(v) for k, v in data.get("edges", {}).items()}
+        return points, edges
+    except Exception as e:
+        print(f"[NavCore] waypoint_graph.yaml 로드 실패: {e} — 빈 그래프 사용")
+        return {}, {}
+
+
+# ─────────────────────────────────────────────────────────────
+# NavCore Mixin
+# ─────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────
 # Waypoint Graph Loader
@@ -91,15 +128,58 @@ class NavCore:
         """Nav2 NavigateToPose 액션 직접 전송 (경유지 없음)."""
         if not self._nav_client.wait_for_server(timeout_sec=3.0):
             self._node.get_logger().error('[NavCore] navigate_to_pose: 액션 서버 없음')
+            if done_callback:
+                done_callback(False)
             return
+
+        self._nav_gen        += 1
+        self._nav_retry_count = 0
+        my_gen               = self._nav_gen
+        self._goal_x         = x
+        self._goal_y         = y
+        self._goal_yaw       = yaw
+        self._nav_done_cb    = done_callback
+        self._pid_zone_radius = pid_zone_radius
+        self._nav_mode       = 'NAV2'
 
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
 
         future = self._nav_client.send_goal_async(goal)
-        future.add_done_callback(
-            lambda f: self._on_goal_accepted(f, done_callback)
-        )
+        future.add_done_callback(lambda f, g=my_gen: self._on_goal_accepted(f, g))
+
+        self._restart_timer('zone')
+
+    # ── 웨이포인트 경유 이동 (핵심 추가) ─────────────────────
+
+    def navigate_via_waypoints(self, target_x: float, target_y: float,
+                                target_yaw: float = 0.0,
+                                done_callback=None):
+        """
+        웨이포인트 그래프 경유 후 최종 좌표로 이동.
+
+        흐름:
+          1. 현재 위치 → 가장 가까운 시작 웨이포인트
+          2. 목적지 (target_x, target_y) → 가장 가까운 끝 웨이포인트
+          3. BFS로 시작 wp → 끝 wp 경로 계산
+          4. 경유 wp 순차 이동
+          5. 마지막에 실제 (target_x, target_y, target_yaw) 로 최종 이동
+          6. done_callback 호출
+
+        웨이포인트 그래프가 비어있으면 navigate_to_pose() 로 폴백.
+        """
+        if not self._wp_points:
+            self._node.get_logger().warn(
+                "[NavCore] 웨이포인트 그래프 없음 — 직접 이동으로 폴백"
+            )
+            self.navigate_to_pose(target_x, target_y, target_yaw, done_callback)
+            return
+
+        threading.Thread(
+            target=self._waypoint_nav_thread,
+            args=(target_x, target_y, target_yaw, done_callback),
+            daemon=True,
+        ).start()
 
     # ── 웨이포인트 경유 이동 (핵심 추가) ─────────────────────
 
@@ -338,6 +418,23 @@ class NavCore:
             if self.point_in_zone(px, py, zone):
                 return zone_id
         return None
+
+    def _restart_timer(self, kind: str):
+        """kind: 'zone' | 'pid'"""
+        if kind == 'zone':
+            self._cancel_timer('zone')
+            self._zone_timer = self._node.create_timer(ZONE_CHECK_PERIOD, self._zone_check)
+        elif kind == 'pid':
+            self._cancel_timer('pid')
+            self._pid_timer = self._node.create_timer(PID_PERIOD, self._pid_loop)
+
+    def _cancel_timer(self, kind: str):
+        if kind == 'zone' and self._zone_timer is not None:
+            self._zone_timer.cancel()
+            self._zone_timer = None
+        elif kind == 'pid' and self._pid_timer is not None:
+            self._pid_timer.cancel()
+            self._pid_timer = None
 
     @staticmethod
     def _make_pose_stamped(x: float, y: float, yaw: float) -> PoseStamped:

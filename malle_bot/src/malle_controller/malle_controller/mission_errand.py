@@ -7,6 +7,7 @@ from enum import Enum, auto
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
+from malle_controller.pid_edges import get_pid_radius
 
 class ErrandState(Enum):
     IDLE         = auto()
@@ -39,6 +40,7 @@ class MissionErrandNode(Node, NavCore):
         self._state      = ErrandState.IDLE
         self._store_poi  = ''
         self._meetup_poi = ''
+        self._prev_poi_id = ''
 
         self.get_logger().info('[MissionErrand] 준비 완료')
 
@@ -85,11 +87,11 @@ class MissionErrandNode(Node, NavCore):
             pass
 
         elif new_state == ErrandState.DONE:
-            self.stop()
+            self.cmd_vel(0.0, 0.0)
 
         elif new_state == ErrandState.IDLE:
             self.cancel_navigation()
-            self.stop()
+            self.cmd_vel(0.0, 0.0)
 
     def _go_to_poi(self, poi_id: str, done_cb):
         ...
