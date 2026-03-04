@@ -1,95 +1,49 @@
 # waypoint_graph.yaml
-# POI 간 경유지 그래프 (웨이포인트는 YAML 주 소스)
-#
-# 포맷:
-#   pois:
-#     <poi_id>:
-#       name:    표시명
-#       x, y:    map 좌표 (m)
-#       yaw:     목표 방향 (라디안)
-#       zone_id: 소속 구역 ID
-#
-#   edges:
-#     - from: <poi_id>
-#       to:   <poi_id>
-#       via:            # 중간 경유 좌표 목록 (선택)
-#         - [x, y]
-#         - [x, y]
-#
-# 서버에서 POI/Zone 데이터를 받아올 수 없을 때는
-# config/fallback/pois.yaml 과 config/fallback/zones.yaml 을 사용한다.
-# 이 파일의 웨이포인트 그래프는 항상 로컬에서 참조한다.
+# Mall-E Smart Shopping Assistant - Waypoint Configuration
+# Description: 좁은 통로(20cm) 및 충전 스테이션 진입을 위한 정밀 좌표 데이터
 
-pois:
-  entrance:
-    name: "입구"
-    x: 0.0
-    y: 0.0
-    yaw: 0.0
-    zone_id: zone_lobby
-
-  cafe_a:
-    name: "카페 A"
-    x: 3.5
-    y: 1.2
-    yaw: 1.5708   # 90°
-    zone_id: zone_f1
-
-  cafe_b:
-    name: "카페 B"
-    x: 6.0
-    y: 1.2
-    yaw: 1.5708
-    zone_id: zone_f1
-
-  store_a:
-    name: "매장 A"
-    x: 3.5
-    y: 5.0
-    yaw: 3.1416   # 180°
-    zone_id: zone_f1
-
-  meetup_lobby:
-    name: "meet-up 로비"
-    x: 1.0
-    y: 0.5
-    yaw: 0.0
-    zone_id: zone_lobby
-
-  charging_dock:
-    name: "충전 스테이션"
-    x: -1.0
-    y: -0.5
-    yaw: 3.1416
-    zone_id: zone_back
+waypoints:
+  p0:      {x: 0.391, y: 0.351}
+  p1:      {x: 0.391, y: 0.845}
+  p2:      {x: 0.396, y: 1.950}
+  p3:      {x: 1.200, y: 1.950}
+  p4:      {x: 1.199, y: 0.850}
+  p5:      {x: 1.650, y: 0.850}
+  p6:      {x: 2.074, y: 0.856}
+  p7:      {x: 1.200, y: 1.400}
+  p8:      {x: 2.100, y: 0.247}
+  p9:      {x: 2.397, y: 0.254}
+  p10:     {x: 2.388, y: 1.297}
+  p11:     {x: 1.804, y: 1.950}
+  p12:     {x: 0.917, y: 0.300}
+  p13:     {x: 0.917, y: 0.845}
+  p14:     {x: 1.199, y: 0.300}
+  p15:     {x: 2.000, y: 1.400}
+  p16:     {x: 1.800, y: 0.300}
+  charger1: {x: 0.250, y: 0.650}
+  charger2: {x: 0.450, y: 0.650}
+  p2_1:    {x: 0.396, y: 1.700}
+  p3_1:    {x: 1.200, y: 1.700}
+  p11_1:   {x: 1.804, y: 1.700}
 
 edges:
-  - from: entrance
-    to:   cafe_a
-
-  - from: entrance
-    to:   cafe_b
-    via:
-      - [2.0, 0.0]
-      - [2.0, 1.2]
-
-  - from: cafe_a
-    to:   cafe_b
-
-  - from: cafe_a
-    to:   store_a
-
-  - from: cafe_b
-    to:   store_a
-
-  - from: store_a
-    to:   meetup_lobby
-    via:
-      - [3.5, 3.0]
-      - [1.0, 3.0]
-
-  - from: meetup_lobby
-    to:   entrance
-
-  - from: entrance
-    to:   charging_dock
+  p0:      [p1, charger1, charger2]
+  p1:      [p0, p2_1, p13]
+  p2:      [p1, p3, p2_1]
+  p3:      [p2, p4, p7]
+  p4:      [p3, p5, p13]
+  p5:      [p4, p6]
+  p6:      [p5, p8, p15]
+  p7:      [p3_1, p4]
+  p8:      [p6, p9, p16]
+  p9:      [p8]
+  p10:     [p7, p15]
+  p11:     [p3]
+  p12:     [p13, p14]
+  p13:     [p1, p12, p4]
+  p14:     [p12, p16]
+  p15:     [p6, p11_1, p10]
+  p16:     [p8, p14]
+  p2_1:    [p3_1, p1]
+  p3_1:    [p11_1, p7]
+  p11_1:   [p15, p3_1, p11]

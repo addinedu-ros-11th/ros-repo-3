@@ -232,11 +232,28 @@ export default function ManualControlPage() {
           <div className="bg-card rounded-2xl p-4 border border-border">
             <h4 className="text-xs font-bold text-foreground mb-2 uppercase tracking-wider">Lockbox Status</h4>
             <div className="flex gap-2 mb-3">
-              {[1, 2, 3, 4, 5].map(i => (
-                <div key={i} className={`w-6 h-6 rounded-full border-2 ${i <= 2 ? 'bg-emerald-500 border-emerald-600' : 'bg-secondary border-border'}`} />
+              {(selectedBot?.lockboxSlots?.length
+                ? selectedBot.lockboxSlots
+                : [1, 2, 3, 4, 5].map(i => ({ slot_no: i, status: 'EMPTY' }))
+              ).map(sl => (
+                <div
+                  key={sl.slot_no}
+                  title={`Slot ${sl.slot_no}: ${sl.status}`}
+                  className={`w-6 h-6 rounded-full border-2 ${
+                    sl.status === 'EMPTY'
+                      ? 'bg-secondary border-border'
+                      : sl.status === 'RESERVED'
+                      ? 'bg-amber-400 border-amber-500'
+                      : 'bg-emerald-500 border-emerald-600'
+                  }`}
+                />
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">Slots 1-2 occupied • 3 available</p>
+            <p className="text-xs text-muted-foreground">
+              {selectedBot?.lockboxSlots?.length
+                ? `${selectedBot.lockboxSlots.filter(s => s.status !== 'EMPTY').length} occupied • ${selectedBot.lockboxSlots.filter(s => s.status === 'EMPTY').length} available`
+                : 'Loading...'}
+            </p>
           </div>
         </div>
       </div>

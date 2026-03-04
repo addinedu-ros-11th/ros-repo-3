@@ -49,6 +49,10 @@ class MissionErrandNode(Node, NavCore):
             self._store_poi  = parts[0] if len(parts) > 0 else ''
             self._meetup_poi = parts[1] if len(parts) > 1 else ''
             self._transition(ErrandState.GO_STORE)
+        elif token.startswith('errand_meetup:'):   # ← 추가
+            self._meetup_poi = token.split(':', 1)[1]
+            if self._state == ErrandState.BOX_FULL or self._state == ErrandState.GO_MEETUP:
+                self._transition(ErrandState.GO_MEETUP)
         elif token == 'idle':
             self._transition(ErrandState.IDLE)
 

@@ -30,7 +30,7 @@ import httpx
 ROBOT_ID        = int(os.getenv("ROBOT_ID", "1"))
 ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "malle_15")
 
-MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000")
+MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
 STATE_UPDATE_INTERVAL = 0.5
 
@@ -93,6 +93,12 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────
+# 전역 참조 (main()에서 주입)
+# ─────────────────────────────────────────────────────────────
+_ros_node = None
+_mission_executor = None
+
+# ─────────────────────────────────────────────────────────────
 # Camera frame buffer
 # ─────────────────────────────────────────────────────────────
 
@@ -108,7 +114,6 @@ class CameraFrameBuffer:
     def get(self) -> Optional[bytes]:
         with self._lock:
             return self._frame
-
 
 camera_buffer = CameraFrameBuffer()
 
@@ -170,9 +175,31 @@ if HAS_FASTAPI:
         item_id: Optional[int] = None
         poi_name: Optional[str] = None
 
-    # 전역 참조 (main()에서 주입)
-    _ros_node: Optional["BridgeNode"] = None
-    _mission_executor = None
+    class FollowRequest(BaseModel):
+        session_id: Optional[int] = None
+        tag_id: int = 11
+
+    class ErrandRequest(BaseModel):
+        session_id: Optional[int] = None
+        order_id: Optional[int] = None
+        store_poi_id: Optional[int] = None
+        meet_poi_id: Optional[int] = None
+        meet_x_m: Optional[float] = None
+        meet_y_m: Optional[float] = None        
+
+    @bridge_app.post("/bridge/follow/start")
+    async def follow_start(req: FollowRequest):
+        if _ros_node:
+            _ros_node.publish_trigger(f"start_follow_{req.tag_id}")
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/follow/stop")
+    async def follow_stop():
+        if _ros_node:
+            _ros_node.publish_trigger("idle")
+        return {"ok": True}
+
+    # 전역 참조는 모듈 최상위로 이동 (아래 참조)
 
     @bridge_app.get("/health")
     async def health():
@@ -224,7 +251,7 @@ if HAS_FASTAPI:
         """
         if not _mission_executor:
             if _ros_node:
-                _ros_node.send_nav_goal(req.x, req.y, req.theta, poi_name=req.poi_name)
+                _ros_node.send_nav_goal(req.x, req.y, req.theta)
             return {"ok": True, "mode": "fallback_nav"}
 
         if req.session_id:
@@ -240,6 +267,21 @@ if HAS_FASTAPI:
             threading.Thread(target=_nav, daemon=True).start()
             return {"ok": True, "mode": "direct_nav"}
 
+    @bridge_app.post("/bridge/guide/advance")
+    async def guide_advance():
+        if _mission_executor:
+            threading.Thread(
+                target=lambda: _mission_executor._guide.advance(),
+                daemon=True
+            ).start()
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/guide/stop")
+    async def guide_stop():
+        if _mission_executor:
+            _mission_executor._guide.stop()
+        return {"ok": True}
+
     @bridge_app.post("/bridge/stop")
     async def stop_mission():
         """E-Stop 또는 세션 종료 시 모든 미션 중지."""
@@ -247,6 +289,32 @@ if HAS_FASTAPI:
             _mission_executor.stop_all()
         elif _ros_node:
             _ros_node.publish_cmd_vel(0.0, 0.0)
+        return {"ok": True}
+    
+    @bridge_app.post("/bridge/errand/start")
+    async def errand_start(req: ErrandRequest):
+        """pickup.py → mission_errand.py 트리거.
+        store_poi_id만 전달 (meetup은 /errand/meetup에서 별도 처리).
+        """
+        if _ros_node and req.store_poi_id:
+            _ros_node.publish_trigger(
+                f"start_errand:{req.store_poi_id},"
+            )
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/errand/meetup")
+    async def errand_meetup(req: ErrandRequest):
+        """meetup 위치 확정 → mission_errand.py에 meetup poi 전달."""
+        if _ros_node and req.meet_poi_id:
+            _ros_node.publish_trigger(
+                f"errand_meetup:{req.meet_poi_id}"
+            )
+        return {"ok": True}
+
+    @bridge_app.post("/bridge/errand/stop")
+    async def errand_stop():
+        if _ros_node:
+            _ros_node.publish_trigger("idle")
         return {"ok": True}
 
     # ── MJPEG 스트리밍 ──────────────────────────────────────────────────────
@@ -326,6 +394,7 @@ if HAS_ROS2:
             self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
             self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
+            self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
             self.get_logger().info("Bridge ready.")
@@ -353,7 +422,7 @@ if HAS_ROS2:
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
             try:
                 self._http_client.patch(
-                    f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/state",
+                    f"http://localhost:8000/api/v1/robots/{ROBOT_ID}/state",
                     json={
                         "x_m":          self._state["x_m"],
                         "y_m":          self._state["y_m"],
@@ -389,22 +458,19 @@ if HAS_ROS2:
             msg.data = command
             self._task_command_pub.publish(msg)
 
-        def send_nav_goal(self, x: float, y: float, theta: float, poi_name: str = None):
-            """폴백용 — MissionExecutor 없을 때만 사용. nav_node.py가 구독."""
+        def publish_trigger(self, command: str):
+            """mission_follow.py 등 /malle/mission_trigger 구독자에게 명령 발행."""
+            msg = String()
+            msg.data = command
+            self._mission_trigger_pub.publish(msg)    
+
+        def send_nav_goal(self, x: float, y: float, theta: float):
+            """폴백용 — MissionExecutor 없을 때만 사용."""
             import json as _j
             msg = String()
-            if poi_name:
-                # POI 이름 + 좌표를 함께 전달 → nav_node에서 웨이포인트 매핑
-                msg.data = _j.dumps({
-                    "action": "navigate_to_poi",
-                    "poi_name": poi_name,
-                    "x": x, "y": y, "theta": theta,
-                })
-                self.get_logger().info(f"[fallback] Nav POI: '{poi_name}' ({x:.3f}, {y:.3f})")
-            else:
-                msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
-                self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
+            msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
             self._task_command_pub.publish(msg)
+            self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
 
 
 # ─────────────────────────────────────────────────────────────

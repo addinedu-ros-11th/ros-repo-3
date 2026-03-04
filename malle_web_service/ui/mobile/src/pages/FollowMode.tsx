@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore, FollowStatus } from '@/store/appStore';
+import { api } from '@/api/client';
 
 const tagOptions: (11 | 12 | 13)[] = [11, 12, 13];
 
@@ -44,12 +45,23 @@ export default function FollowMode() {
     );
   }
 
-  const handleStart = () => {
-    startFollowMe(selectedTag);
+  const handleStart = async () => {
+      startFollowMe(selectedTag);
+      const { currentSessionId } = useAppStore.getState();
+      if (currentSessionId) {
+          await api.patch(`/sessions/${currentSessionId}/follow-tag`, {
+              tag_code: selectedTag,
+              tag_family: 'tag36h11',
+          }).catch(() => {});
+      }
   };
 
-  const handleStop = () => {
-    stopFollowMe();
+  const handleStop = async () => {
+      stopFollowMe();
+      const { currentSessionId } = useAppStore.getState();
+      if (currentSessionId) {
+          await api.post(`/sessions/${currentSessionId}/follow/stop`, {}).catch(() => {});
+      }
   };
 
   const getStatusColor = (status: FollowStatus) => {
@@ -126,9 +138,16 @@ export default function FollowMode() {
                     Cancel
                   </button>
                   <button
-                    onClick={() => {
-                      startFollowMe(selectedTag);
-                      setChangingTag(false);
+                    onClick={async () => {
+                        startFollowMe(selectedTag);
+                        setChangingTag(false);
+                        const { currentSessionId } = useAppStore.getState();
+                        if (currentSessionId) {
+                            await api.patch(`/sessions/${currentSessionId}/follow-tag`, {
+                                tag_code: selectedTag,
+                                tag_family: 'tag36h11',
+                            }).catch(() => {});
+                        }
                     }}
                     className="flex-1 py-3 rounded-xl bg-white text-teal-600 font-semibold active-press-sm"
                   >

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRobotStore } from '@/stores/robotStore';
+import { pickupApi } from '@/api/services';
 
 type LoadingStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
@@ -15,7 +16,7 @@ const steps = [
 ];
 
 export function PickupLoadingOverlay() {
-  const { pickup, setShowLoadingOverlay, completePickup, setPickupStatus } = useRobotStore();
+  const { pickup, setShowLoadingOverlay, completePickup, setPickupStatus, markPickupLoaded } = useRobotStore();
   const [currentStep, setCurrentStep] = useState<LoadingStep>(1);
   const [staffPin, setStaffPin] = useState('');
   const [pinError, setPinError] = useState(false);
@@ -54,10 +55,10 @@ export function PickupLoadingOverlay() {
     }
   };
 
-  const handleConfirmLoad = (loaded: boolean) => {
+  const handleConfirmLoad = async (loaded: boolean) => {
     if (loaded) {
       setCurrentStep(6);
-      setPickupStatus('LOADED');
+      await markPickupLoaded();
     } else {
       setCurrentStep(3);
       setPickupStatus('STAFF_PIN');
@@ -67,7 +68,12 @@ export function PickupLoadingOverlay() {
   const handleMeetUpReceived = () => {
     setCurrentStep(7);
     setTimeout(() => setCurrentStep(8), 2500);
-    setTimeout(() => {
+    setTimeout(async () => {
+      const { currentSessionId, pickup } = useRobotStore.getState();
+      const serverOrderId = (pickup.currentOrder as any)?.serverOrderId;
+      if (currentSessionId && serverOrderId) {
+        await pickupApi.updateStatus(currentSessionId, serverOrderId, 'COMPLETED');
+      }
       completePickup();
       setShowLoadingOverlay(false);
       setCurrentStep(1);

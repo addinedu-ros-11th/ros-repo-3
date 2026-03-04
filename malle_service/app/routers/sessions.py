@@ -1,4 +1,4 @@
-"""Session management endpoints."""
+# Session management endpoints.
 
 from datetime import datetime, timezone
 
@@ -17,9 +17,11 @@ from app.schemas.session import (
     PinVerifyRequest,
     FollowTagRequest,
 )
+from app.utils.bridge import send_to_bridge
 
 class AssignRobotRequest(BaseModel):
     target_poi_id: int | None = None
+
 from app.services.session_workflow import (
     create_session_with_assignment,
     assign_robot_to_session,
@@ -34,7 +36,30 @@ router = APIRouter()
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(req: SessionCreateRequest, db: AsyncSession = Depends(get_db)):
-    """Create a new session with automatic robot assignment."""
+    """
+    Create a new session with automatic robot assignment.
+
+    Policy:
+    - 동일 user_id에 대해 ENDED가 아닌 기존 세션이 있으면 모두 ENDED 처리 후 새 세션 생성.
+      (중복 ACTIVE/MATCHING/ASSIGNED 누적 방지)
+    """
+    # 1) 기존 활성 세션(ENDED 아님) 정리
+    existing_result = await db.execute(
+        select(Session).where(
+            Session.user_id == req.user_id,
+            Session.status != SessionStatus.ENDED,
+        ).order_by(Session.created_at.desc())
+    )
+    existing_sessions = existing_result.scalars().all()
+
+    for s in existing_sessions:
+        # 이미 ENDED면 제외(쿼리상 없지만 방어)
+        if s.status == SessionStatus.ENDED:
+            continue
+        # 기존 세션 자동 종료
+        await end_session_workflow(db, s, reason="superseded_by_new_session")
+
+    # 2) 새 세션 생성 + 자동 배정
     session = await create_session_with_assignment(
         db,
         user_id=req.user_id,
@@ -138,8 +163,16 @@ async def set_follow_tag(
     }
     if session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STARTED, follow_payload)
+    await manager.send_to_mobile(session_id, WsEvent.FOLLOW_STARTED, follow_payload)
     # dashboard도 follow 시작 알림
     await manager.send_to_dashboard(WsEvent.FOLLOW_STARTED, follow_payload)
+
+    # bridge → mission_follow.py 트리거
+    if session.assigned_robot_id:
+        await send_to_bridge("follow/start", {
+            "session_id": session_id,
+            "tag_id": req.tag_code,
+        })
 
     return session
 
@@ -173,3 +206,22 @@ async def end_session(session_id: int, db: AsyncSession = Depends(get_db)):
 
     session = await end_session_workflow(db, session, reason="user_ended")
     return session
+
+
+@router.post("/sessions/{session_id}/follow/stop")
+async def stop_follow(session_id: int, db: AsyncSession = Depends(get_db)):
+    """Follow 미션 중지."""
+    session = await db.get(Session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.assigned_robot_id:
+        raise HTTPException(status_code=400, detail="No robot assigned")
+
+    await send_to_bridge("follow/stop", {"session_id": session_id})
+
+    follow_payload = {"session_id": session_id, "robot_id": session.assigned_robot_id}
+    await manager.send_to_robot(session.assigned_robot_id, WsEvent.FOLLOW_STOPPED, follow_payload)
+    await manager.send_to_mobile(session_id, WsEvent.FOLLOW_STOPPED, follow_payload)
+    await manager.send_to_dashboard(WsEvent.FOLLOW_STOPPED, follow_payload)
+
+    return {"ok": True}
