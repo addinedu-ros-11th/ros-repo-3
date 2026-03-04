@@ -16,8 +16,72 @@ from app.models.mission import Mission, MissionType, MissionStatus
 from app.models.lockbox import LockboxSlot, LockboxSlotStatus
 from app.ws.manager import manager
 from app.ws.events import WsEvent
+from app.utils.bridge import send_to_bridge
 
 router = APIRouter()
+
+
+async def _get_lockbox_slots(db: AsyncSession, robot_id: int) -> list[dict]:
+    """락박스 슬롯 목록 조회 (LOCKBOX_UPDATED 브로드캐스트용).
+
+    각 슬롯당 활성 주문 1개만 매핑 (1:N 중복 방지).
+    활성 주문 기준: CREATED / LOADED / MEET_SET / RETURNING / COMPLETED
+    """
+    from sqlalchemy import select as _select
+    from app.models.poi import Poi
+    from app.models.store import Store
+
+    # 슬롯 목록 조회
+    slot_result = await db.execute(
+        _select(LockboxSlot)
+        .where(LockboxSlot.robot_id == robot_id)
+        .order_by(LockboxSlot.slot_no)
+    )
+    slots = slot_result.scalars().all()
+
+    # 활성 주문: 슬롯 id → 주문 1개 (가장 최근)
+    order_result = await db.execute(
+        _select(PickupOrder)
+        .where(
+            PickupOrder.assigned_slot_id.in_([s.id for s in slots]),
+            PickupOrder.status.in_([
+                PickupStatus.CREATED,
+                PickupStatus.LOADED,
+                PickupStatus.MEET_SET,
+                PickupStatus.RETURNING,
+                PickupStatus.COMPLETED,
+            ]),
+        )
+        .order_by(PickupOrder.id.desc())
+    )
+    orders = order_result.scalars().all()
+
+    # slot_id → 첫 번째 (최신) 주문만 매핑
+    slot_order_map: dict[int, PickupOrder] = {}
+    for o in orders:
+        if o.assigned_slot_id not in slot_order_map:
+            slot_order_map[o.assigned_slot_id] = o
+
+    # poi_id → poi name 조회
+    poi_ids = {o.pickup_poi_id for o in slot_order_map.values() if o.pickup_poi_id}
+    poi_map: dict[int, str] = {}
+    if poi_ids:
+        poi_result = await db.execute(
+            _select(Poi).where(Poi.id.in_(poi_ids))
+        )
+        for poi in poi_result.scalars().all():
+            poi_map[poi.id] = poi.name
+
+    return [
+        {
+            "slot_no": slot.slot_no,
+            "status": slot.status.value,
+            "order_id": slot_order_map[slot.id].id if slot.id in slot_order_map else None,
+            "pickup_poi_id": slot_order_map[slot.id].pickup_poi_id if slot.id in slot_order_map else None,
+            "store_name": poi_map.get(slot_order_map[slot.id].pickup_poi_id) if slot.id in slot_order_map else None,
+        }
+        for slot in slots
+    ]
 
 
 class PickupItemRequest(BaseModel):
@@ -100,10 +164,14 @@ async def create_pickup_order(
     # Reserve lockbox slot if robot assigned
     if session.assigned_robot_id:
         slot_result = await db.execute(
-            select(LockboxSlot).where(
+            select(LockboxSlot)
+            .where(
                 LockboxSlot.robot_id == session.assigned_robot_id,
                 LockboxSlot.status == LockboxSlotStatus.EMPTY,
-            ).limit(1)
+            )
+            .order_by(LockboxSlot.slot_no)
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         slot = slot_result.scalar_one_or_none()
         if slot:
@@ -134,6 +202,22 @@ async def create_pickup_order(
         "order": data,
     })
 
+    # 슬롯 RESERVED 상태를 모든 클라이언트에 동기화
+    if session.assigned_robot_id:
+        slots = await _get_lockbox_slots(db, session.assigned_robot_id)
+        lockbox_payload = {"robot_id": session.assigned_robot_id, "slots": slots}
+        await manager.send_to_robot(session.assigned_robot_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+
+    # bridge → mission_errand.py 트리거 (store_poi_id 전달)
+    if session.assigned_robot_id:
+        await send_to_bridge("errand/start", {
+            "session_id": session_id,
+            "order_id": order.id,
+            "store_poi_id": req.pickup_poi_id,
+        })
+
     return order
 
 
@@ -159,15 +243,18 @@ async def update_pickup_status(
         raise HTTPException(status_code=404, detail="Pickup order not found")
 
     order.status = req.status
+
     if req.status == PickupStatus.LOADED:
         order.loaded_at = datetime.utcnow()
-    elif req.status == PickupStatus.COMPLETED:
-        order.completed_at = datetime.utcnow()
-        # Release slot
+        # 적재 완료 → slot PICKEDUP (고객 수령 대기)
         if order.assigned_slot_id:
             slot = await db.get(LockboxSlot, order.assigned_slot_id)
             if slot:
-                slot.status = LockboxSlotStatus.EMPTY
+                slot.status = LockboxSlotStatus.PICKEDUP
+
+    elif req.status == PickupStatus.COMPLETED:
+        order.completed_at = datetime.utcnow()
+        # slot 상태는 건드리지 않음 — 고객이 박스 열고 꺼낼 때까지 PICKEDUP 유지
 
     await db.flush()
     await db.refresh(order)
@@ -179,6 +266,14 @@ async def update_pickup_status(
     if session and session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.PICKUP_STATUS_CHANGED, data)
     await manager.send_to_dashboard(WsEvent.PICKUP_STATUS_CHANGED, data)
+
+    # LOADED 시만 LOCKBOX_UPDATED 발행 (COMPLETED는 slot 변경 없음)
+    if req.status == PickupStatus.LOADED and session and session.assigned_robot_id:
+        slots = await _get_lockbox_slots(db, session.assigned_robot_id)
+        lockbox_payload = {"robot_id": session.assigned_robot_id, "slots": slots}
+        await manager.send_to_robot(session.assigned_robot_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_mobile(session_id, WsEvent.LOCKBOX_UPDATED, lockbox_payload)
+        await manager.send_to_dashboard(WsEvent.LOCKBOX_UPDATED, lockbox_payload)
 
     return order
 
@@ -225,7 +320,24 @@ async def set_meetup(
     session = await db.get(Session, session_id)
     data = PickupOrderResponse.model_validate(order).model_dump(mode="json")
 
+    if order.meet_poi_id:
+        from app.models.poi import Poi as _Poi
+        _poi = await db.get(_Poi, order.meet_poi_id)
+        data["meet_poi_name"] = _poi.name if _poi else None
+    else:
+        data["meet_poi_name"] = None
+
     if session and session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.PICKUP_MEET_SET, data)
+
+    # meetup 위치 확정 → bridge에 meetup poi 좌표로 이동 명령
+    if session and session.assigned_robot_id:
+        await send_to_bridge("errand/meetup", {
+            "session_id": session_id,
+            "order_id": order.id,
+            "meet_poi_id": order.meet_poi_id,
+            "meet_x_m": order.meet_x_m,
+            "meet_y_m": order.meet_y_m,
+        })
 
     return order

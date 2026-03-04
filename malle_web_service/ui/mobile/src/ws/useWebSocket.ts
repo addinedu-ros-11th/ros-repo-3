@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000";
+const WS_DEBUG = import.meta.env.VITE_WS_DEBUG === "1";
 
 export interface WsMessage {
   type: string;
@@ -33,14 +34,20 @@ export function useWebSocket({
   onMessageRef.current = onMessage;
 
   const connect = useCallback(() => {
+    if (!path) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const ws = new WebSocket(`${WS_BASE}${path}`);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      if (WS_DEBUG) console.log("[WS][mobile] connected:", `${WS_BASE}${path}`);
+    };
+
     ws.onmessage = (event) => {
       try {
         const msg: WsMessage = JSON.parse(event.data);
+        if (WS_DEBUG) console.log("[WS][mobile] recv:", msg.type, msg.payload);
         onMessageRef.current(msg);
       } catch (e) {
         console.error("[WS] Failed to parse message:", e);
@@ -48,6 +55,7 @@ export function useWebSocket({
     };
 
     ws.onclose = () => {
+      if (WS_DEBUG) console.log("[WS][mobile] closed:", `${WS_BASE}${path}`);
       if (reconnect) {
         reconnectTimer.current = setTimeout(connect, reconnectInterval);
       }

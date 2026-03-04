@@ -38,6 +38,10 @@ export interface LockboxSlotRes {
   slot_no: number;
   status: "EMPTY" | "FULL" | "RESERVED" | "PICKEDUP";
   size_label: string | null;
+  // LOCKBOX_UPDATED WS 이벤트에서 활성 주문 정보 포함 (없으면 null)
+  order_id?: number | null;
+  pickup_poi_id?: number | null;
+  store_name?: string | null;
 }
 
 export const lockboxApi = {

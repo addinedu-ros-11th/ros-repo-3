@@ -19,6 +19,7 @@ interface DashboardWsCallbacks {
   onGuideArrived: (data: Record<string, unknown>) => void;
   onPickupStatusChanged: (data: Record<string, unknown>) => void;
   onLockboxOpened: (data: Record<string, unknown>) => void;
+  onLockboxUpdated: (robotId: number, slots: Record<string, any>[]) => void;
   onFollowStarted: (data: Record<string, unknown>) => void;
   onFollowStopped: (data: Record<string, unknown>) => void;
 }
@@ -174,14 +175,7 @@ function handleWsMessage(msg: WsMessage, cb: DashboardWsCallbacks) {
       break;
 
     case "LOCKBOX_UPDATED":
-      cb.onEventReceived({
-        type: "LOCKBOX_UPDATED",
-        severity: "INFO",
-        robot_id: p.robot_id,
-        session_id: p.session_id,
-        message: `Lockbox updated`,
-        created_at: new Date().toISOString(),
-      });
+      if (p.robot_id != null) cb.onLockboxUpdated(p.robot_id, (p.slots as any[]) ?? []);
       break;
 
     case "PONG":

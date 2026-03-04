@@ -172,6 +172,7 @@ async def update_guide_item_status(
 
     # Always send updated queue
     queue = await _get_queue(db, session_id)
+    await manager.send_to_mobile(session_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
     if session and session.assigned_robot_id:
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
 
@@ -258,6 +259,7 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
         nav_y = float(poi.wait_y_m) if poi.wait_y_m is not None else float(poi.y_m)
         await send_to_bridge("navigate", {
             "robot_id": session.assigned_robot_id,
+            "session_id": session_id,
             "x": nav_x,
             "y": nav_y,
             "theta": 0.0,  # 도착 방향 — 필요 시 poi 테이블에 heading 컬럼 추가
@@ -287,3 +289,57 @@ async def clear_guide_queue(session_id: int, db: AsyncSession = Depends(get_db))
         await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": []})
 
     return {"ok": True, "cleared": len(items)}
+
+@router.post("/sessions/{session_id}/guide-queue/advance")
+async def advance_guide_queue(session_id: int, db: AsyncSession = Depends(get_db)):
+    session = await db.get(Session, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.assigned_robot_id:
+        raise HTTPException(status_code=400, detail="No robot assigned")
+
+    # 현재 ARRIVED 항목 → DONE
+    result = await db.execute(
+        select(GuideQueueItem).where(
+            GuideQueueItem.session_id == session_id,
+            GuideQueueItem.is_active == True,
+            GuideQueueItem.status == GuideItemStatus.ARRIVED,
+        ).order_by(GuideQueueItem.seq)
+    )
+    arrived_item = result.scalars().first()
+
+    if arrived_item:
+        arrived_item.status = GuideItemStatus.DONE
+        arrived_item.completed_at = datetime.now(timezone.utc)
+        await db.flush()
+
+        # 다음 PENDING 있으면 WS GUIDE_NAVIGATING 발행
+        next_result = await db.execute(
+            select(GuideQueueItem).where(
+                GuideQueueItem.session_id == session_id,
+                GuideQueueItem.is_active == True,
+                GuideQueueItem.status == GuideItemStatus.PENDING,
+            ).order_by(GuideQueueItem.seq)
+        )
+        next_item = next_result.scalars().first()
+        queue = await _get_queue(db, session_id)
+
+        await manager.send_to_mobile(session_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
+        await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_QUEUE_UPDATED, {"queue": queue})
+
+        if next_item:
+            next_poi = await db.get(Poi, next_item.poi_id)
+            await manager.send_to_mobile(session_id, WsEvent.GUIDE_NAVIGATING, {
+                "item_id": next_item.id,
+                "poi_name": next_poi.name if next_poi else None,
+            })
+            await manager.send_to_robot(session.assigned_robot_id, WsEvent.GUIDE_NAVIGATING, {
+                "item_id": next_item.id,
+                "poi_id": next_item.poi_id,
+                "poi_name": next_poi.name if next_poi else None,
+                "queue": queue,
+            })
+
+    # bridge → GuideExecutor.advance()
+    await send_to_bridge("guide/advance", {"robot_id": session.assigned_robot_id})
+    return {"ok": True}
