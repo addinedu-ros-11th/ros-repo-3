@@ -6,72 +6,25 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import String, UInt16MultiArray
 from pinky_interfaces.srv import SetLed, Emotion
 
-import cv2
-import numpy as np
-import threading
 import time
-from flask import Flask, Response
-from picamera2 import Picamera2
-from libcamera import Transform
 from pupil_apriltags import Detector
 
-# ==========================================
-# [1. Flask & Camera 전역 설정]
-# ==========================================
-app = Flask(__name__)
-
-picam2 = Picamera2()
-config = picam2.create_video_configuration(
-    main={"size": (640, 480), "format": "RGB888"},
-    transform=Transform(hflip=True, vflip=True)
-)
-picam2.configure(config)
-picam2.start()
-
-global_frame = None
-latest_gray_frame = None
-frame_lock = threading.Lock()
-
-@app.route('/')
-def index():
-    return '<html><body style="background:black; margin:0; display:flex; justify-content:center; align-items:center; height:100vh;"><img src="/video_feed" style="width:100%; max-width:640px; border:2px solid #333;"></body></html>'
-
-def gen_frames():
-    while True:
-        with frame_lock:
-            if global_frame is None: continue
-            frame = global_frame
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.04)
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-def capture_thread():
-    global global_frame, latest_gray_frame
-    while True:
-        frame = picam2.capture_array()
-        latest_gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        _, buffer = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        with frame_lock: global_frame = buffer.tobytes()
-        time.sleep(0.01)
 
 # ==========================================
-# [2. Pinky Safe Vertical Parking 노드]
+# [Pinky Safe Vertical Parking 노드]
 # ==========================================
 class PinkyParkingNode(Node):
 
-    def __init__(self):
+    def __init__(self, get_gray_frame):
         super().__init__('pinky_parking_node')
+        self.get_gray_frame = get_gray_frame
 
         # ROS2 통신 설정
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.result_pub = self.create_publisher(String, '/malle/mission_result', 10)
         self.trigger_sub = self.create_subscription(String, '/malle/mission_trigger', self._on_trigger, 10)
         self.ir_sub = self.create_subscription(UInt16MultiArray, '/ir_sensor/range', self._ir_callback, 10)
-        
+
         self.led_client = self.create_client(SetLed, '/set_led')
         self.emotion_client = self.create_client(Emotion, '/set_emotion')
 
@@ -90,7 +43,7 @@ class PinkyParkingNode(Node):
         self.continuous_detect_count = 0
         
         self.last_target_time = time.time()
-        
+
         self.set_emotion("hello")
         self.create_timer(0.05, self._control_loop)
 
@@ -108,7 +61,6 @@ class PinkyParkingNode(Node):
 
     def _ir_callback(self, msg):
         self.ir_data = msg.data
-        # 검은색 라인 감지 (임계값 250)
         is_black = any(val < 250 for val in self.ir_data)
         
         if is_black:
@@ -140,19 +92,18 @@ class PinkyParkingNode(Node):
             self.set_emotion("hello")
 
     def _control_loop(self):
-        global latest_gray_frame
-        if self.state in ["IDLE", "DONE"] or latest_gray_frame is None:
+        gray = self.get_gray_frame()
+        if self.state in ["IDLE", "DONE"] or gray is None:
             return
 
         # 1. 태그 감지
-        tags = self.detector.detect(latest_gray_frame)
+        tags = self.detector.detect(gray)
         target = next((d for d in tags if d.tag_id == self.target_id), None)
 
         # 2. 태그가 없을 때 처리
         if not target:
             if self.state != "UTURN" and time.time() - self.last_target_time > 0.3:
-                # 태그 탐색을 위한 회전 (Twist 메시지 기준 초당 약 0.5rad)
-                self._send_twist(0.0, 0.5) 
+                self._send_twist(0.0, 0.5)
             return
 
         self.last_target_time = time.time()
@@ -166,7 +117,7 @@ class PinkyParkingNode(Node):
         abs_err = abs(err_x)
 
         # 3. 주차 완료 시퀀스 (매우 근접 시 180도 회전)
-        if size > 320:
+        if size > 250:
             self._perform_uturn()
             return
 
@@ -177,38 +128,32 @@ class PinkyParkingNode(Node):
                 return
             else:
                 self.state = "FINAL_APPROACH"
-                self._send_twist(0.12, 0.0) # 직진 속도 고정
+                self._send_twist(0.12, 0.0)
                 return
 
         # 5. 소실 방지 및 정밀 정렬
-        if tag_left < 20: 
-            self._send_twist(0.0, 0.4) # 왼쪽으로 회전
+        if tag_left < 20:
+            self._send_twist(0.0, 0.4)
             return
         elif tag_right > 620:
-            self._send_twist(0.0, -0.4) # 오른쪽으로 회전
+            self._send_twist(0.0, -0.4)
             return
 
         # 6. 정밀 정렬 주행 (Precision Align)
         self.state = "PRECISION_ALIGN"
-        base_linear = 0.15 # 선속도 (m/s)
-        
-        # Gain 설정
+        base_linear = 0.10
         turn_gain = 0.001 if abs_err > 100 else 0.002
-        angular_z = -err_x * turn_gain # 에러에 따른 회전 속도 결정
-        
+        angular_z = -err_x * turn_gain
         self._send_twist(base_linear, angular_z)
 
     def _perform_uturn(self):
         self.get_logger().info("!!! ARRIVED - PERFORMING 180 TURN !!!")
         self.state = "UTURN"
         self.set_led(255, 255, 0)
-        
-        # ROS2 Timer 루프 밖에서 동작하므로 별도 스레드나 반복문 사용 시 주의
-        # 여기서는 단순 Twist 명령 후 타이머로 종료 시간을 체크하거나 
-        # 간이 반복문을 사용합니다.
+
         start_u = time.time()
         while time.time() - start_u < 1.1:
-            self._send_twist(0.0, 3.0) # 빠른 제자리 회전
+            self._send_twist(0.0, 3.0)
             time.sleep(0.01)
             
         self._send_twist(0.0, 0.0)
@@ -227,26 +172,3 @@ class PinkyParkingNode(Node):
         msg = String()
         msg.data = result
         self.result_pub.publish(msg)
-
-# ==========================================
-# [3. 메인 실행부]
-# ==========================================
-def main():
-    rclpy.init()
-    node = PinkyParkingNode()
-    
-    threading.Thread(target=capture_thread, daemon=True).start()
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False), daemon=True).start()
-    
-    try: 
-        rclpy.spin(node)
-    except KeyboardInterrupt: 
-        pass
-    finally: 
-        node.set_emotion("hello")
-        node.destroy_node()
-        rclpy.shutdown()
-        picam2.stop()
-
-if __name__ == '__main__': 
-    main()
