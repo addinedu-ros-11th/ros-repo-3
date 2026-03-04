@@ -2,11 +2,13 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 logger = logging.getLogger(__name__)
+WS_DEBUG_LOGS = os.getenv("WS_DEBUG_LOGS", "0") == "1"
 
 ws_router = APIRouter()
 
@@ -69,6 +71,12 @@ class ConnectionManager:
                 await ws.send_text(self._make_message(event_type, payload))
             except Exception:
                 self.disconnect_mobile(session_id)
+        elif WS_DEBUG_LOGS:
+            logger.warning(
+                "[WS] drop mobile event=%s session=%s (no connection)",
+                event_type,
+                session_id,
+            )
 
     async def send_to_robot(self, robot_id: int, event_type: str, payload: dict):
         ws = self.robot_connections.get(robot_id)
@@ -77,6 +85,13 @@ class ConnectionManager:
                 await ws.send_text(self._make_message(event_type, payload))
             except Exception:
                 self.disconnect_robot(robot_id)
+        elif WS_DEBUG_LOGS:
+            logger.warning(
+                "[WS] drop robot event=%s robot=%s (no connection, connected=%s)",
+                event_type,
+                robot_id,
+                list(self.robot_connections.keys()),
+            )
 
     async def send_to_dashboard(self, event_type: str, payload: dict):
         msg = self._make_message(event_type, payload)

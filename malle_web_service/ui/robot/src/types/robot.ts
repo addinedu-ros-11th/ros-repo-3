@@ -57,10 +57,12 @@ export interface OrderItem {
   name: string;
   quantity: number;
   price: number;
+  productId?: number;
 }
 
 export interface PickupOrder {
   orderId: string;
+  serverOrderId?: number | null; // 서버 pickup_orders.id (status 업데이트용)
   storeName: string;
   items: OrderItem[];
   slotId: number;
@@ -74,7 +76,7 @@ export interface PickupState {
 }
 
 // Lockbox Types
-export type SlotStatus = 'FULL' | 'EMPTY' | 'RESERVED';
+export type SlotStatus = 'FULL' | 'EMPTY' | 'RESERVED' | 'PICKEDUP';
 export type LogAction = 'OPENED' | 'SECURED' | 'FAILED';
 export type LogResult = 'SUCCESS' | 'FAILURE';
 

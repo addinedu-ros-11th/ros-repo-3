@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store/appStore';
+import { guideApi } from '@/api/guide';
 
 export default function GuideActive() {
   const navigate = useNavigate();
@@ -9,7 +10,11 @@ export default function GuideActive() {
   const pendingCount = guideQueue.filter(item => item.selected && item.status === 'PENDING').length;
   const completedCount = guideQueue.filter(item => item.status === 'DONE').length;
 
-  const handleComplete = () => {
+  const handleComplete = async () => {
+    const { currentSessionId } = useAppStore.getState();
+    if (currentSessionId) {
+      await guideApi.advance(currentSessionId).catch(() => {});
+    }
     completeCurrentGuide();
     const remaining = guideQueue.filter(item => item.selected && item.status === 'PENDING').length;
     if (remaining === 0) {
@@ -21,7 +26,21 @@ export default function GuideActive() {
         navigate('/mode/guide');
       }
     }
-  };
+  };  
+
+  // const handleComplete = () => {
+  //   completeCurrentGuide();
+  //   const remaining = guideQueue.filter(item => item.selected && item.status === 'PENDING').length;
+  //   if (remaining === 0) {
+  //     setRobotMode(null);
+  //     if (session.type === 'TASK') {
+  //       completeTaskSession();
+  //       navigate('/task-complete');
+  //     } else {
+  //       navigate('/mode/guide');
+  //     }
+  //   }
+  // };
 
   const handleCancel = () => {
     setRobotMode(null);

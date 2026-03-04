@@ -1,48 +1,106 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRobotStore } from '@/stores/robotStore';
-import { stores } from '@/data/stores';
 import { toast } from 'sonner';
+import { poiApi } from '@/api/services';
+
+// ── 맵 물리 크기 (미터) ──────────────────────────────────────────────────────
+const MAP_WIDTH_M  = 2.45;
+const MAP_HEIGHT_M = 2.0;
+
+/**
+ * 미터 좌표 → 맵 컨테이너 내 % 위치 변환
+ * ROS2 좌표계: x = 오른쪽, y = 위쪽
+ * CSS: left = x/width, top = (height-y)/height  (y축 반전)
+ */
+function toMapPercent(x_m: number, y_m: number) {
+  const left = (x_m / MAP_WIDTH_M)                   * 100;
+  const top  = ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * 100;
+  return {
+    left: `${Math.min(Math.max(left, 2), 98)}%`,
+    top:  `${Math.min(Math.max(top,  2), 98)}%`,
+  };
+}
+
+// POI 타입 → 아이콘
+function poiIcon(type: string) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('cafe') || t.includes('dining') || t.includes('food')) return 'local_cafe';
+  if (t.includes('fashion') || t.includes('cloth'))                      return 'checkroom';
+  if (t.includes('sport'))                                                return 'sports_soccer';
+  if (t.includes('electronic'))                                           return 'devices';
+  if (t.includes('station') || t.includes('charger'))                    return 'bolt';
+  if (t.includes('lounge'))                                               return 'weekend';
+  return 'storefront';
+}
+
+// ── POI 타입 정의 ────────────────────────────────────────────────────────────
+interface Poi {
+  id: number;
+  name: string;
+  type: string;
+  x_m: number;
+  y_m: number;
+  wait_x_m?: number | null;
+  wait_y_m?: number | null;
+}
 
 export function MapPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [highlightedStore, setHighlightedStore] = useState<string | null>(null);
-  const [hoveredStore, setHoveredStore] = useState<string | null>(null);
-  const [hoverTimeout, setHoverTimeout] = useState<ReturnType<typeof setTimeout> | null>(null);
-  const { robot, addToGuideQueue, createPickupOrder, lockboxSlots, setPendingPickupStore } = useRobotStore();
-  const navigate = useNavigate();
+  const [highlightedPoi, setHighlightedPoi] = useState<number | null>(null);
+  const [hoveredPoi, setHoveredPoi]         = useState<number | null>(null);
+  const [hoverTimeout, setHoverTimeout]     = useState<ReturnType<typeof setTimeout> | null>(null);
+  const [pois, setPois]                     = useState<Poi[]>([]);
 
-  useEffect(() => {
-    const highlight = searchParams.get('highlight');
-    if (highlight) {
-      setHighlightedStore(highlight);
-      searchParams.delete('highlight');
-      setSearchParams(searchParams, { replace: true });
-      const timer = setTimeout(() => setHighlightedStore(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, []);
+  const { robot, addToGuideQueue, lockboxSlots, setPendingPickupStore } = useRobotStore();
+  const navigate = useNavigate();
 
   const hasEmptySlot = lockboxSlots.some(s => s.status === 'EMPTY');
 
-  const handleAddToGuide = (store: typeof stores[0]) => {
+  // ── API에서 POI 로드 ──────────────────────────────────────────────────────
+  useEffect(() => {
+    poiApi.list()
+      .then((data) => setPois(data))
+      .catch(() => {});
+  }, []);
+
+  // ── highlight 쿼리 파라미터 처리 ─────────────────────────────────────────
+  useEffect(() => {
+    const highlight = searchParams.get('highlight');
+    if (highlight) {
+      setHighlightedPoi(Number(highlight));
+      searchParams.delete('highlight');
+      setSearchParams(searchParams, { replace: true });
+      const t = setTimeout(() => setHighlightedPoi(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
+  const handleAddToGuide = (poi: Poi) => {
     addToGuideQueue({
-      poiId: store.id,
-      poiName: store.name,
-      floor: store.location,
-      estimatedTime: Math.floor(Math.random() * 5) + 2,
+      poiId:         poi.id,
+      poiName:       poi.name,
+      floor:         `(${poi.x_m.toFixed(2)}m, ${poi.y_m.toFixed(2)}m)`,
+      estimatedTime: 2,
     });
-    toast.success(`Added ${store.name} to Guide Queue`, { duration: 2000 });
+    toast.success(`Added ${poi.name} to Guide Queue`, { duration: 2000 });
+    setHoveredPoi(null);
   };
 
-  const handleOrderPickup = (store: typeof stores[0]) => {
-    setPendingPickupStore(store.id);
+  const handleOrderPickup = (poi: Poi) => {
+    setPendingPickupStore(poi.id);
     navigate('/mode/pickup');
   };
 
+  // ── robot 위치 (robotStore에서 x_m/y_m 또는 x/y 형태로 올 수 있음) ──────
+  const robotX = (robot as any)?.x_m ?? (robot as any)?.location?.x ?? null;
+  const robotY = (robot as any)?.y_m ?? (robot as any)?.location?.y ?? null;
+  const robotName = (robot as any)?.name ?? 'Robot';
+
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-6">
+      {/* ── 헤더 ── */}
+      <div className="flex items-center justify-between mb-4">
         <h1 className="text-page-title">Mall Map</h1>
         <div className="flex items-center space-x-2">
           <button className="p-2 rounded-xl bg-card border border-slate-200 dark:border-slate-700">
@@ -57,145 +115,153 @@ export function MapPage() {
         </div>
       </div>
 
-      <div className="flex-1 relative bg-slate-100 dark:bg-slate-800 rounded-3xl overflow-visible map-grid">
-        {/* Robot Position */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
-          <div className="relative">
-            <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shadow-lg">
-              <span className="material-icons-round text-white">smart_toy</span>
-            </div>
-            <div className="absolute inset-0 rounded-full bg-primary/30 animate-ping" />
-          </div>
-        </div>
+      {/* ── 맵 컨테이너 ── */}
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+        <div
+          className="relative rounded-2xl overflow-hidden border-2 border-slate-200 dark:border-slate-700 shadow-xl"
+          style={{
+            aspectRatio: '2.45 / 2',
+            width: '100%',
+            maxWidth: '520px',
+          }}
+        >
+          {/* PGM → PNG 맵 이미지 */}
+          <img
+            src="/map_end_end.png"
+            alt="Mall Map"
+            className="absolute inset-0 w-full h-full"
+            style={{ imageRendering: 'pixelated', objectFit: 'fill' }}
+            draggable={false}
+          />
+          {/* 반투명 오버레이 */}
+          <div className="absolute inset-0 bg-slate-100/30 dark:bg-slate-900/30" />
 
-        {/* POI Markers */}
-        {stores.slice(0, 6).map((store, index) => {
-          const positions = [
-            { x: '20%', y: '25%' },
-            { x: '75%', y: '20%' },
-            { x: '30%', y: '70%' },
-            { x: '80%', y: '65%' },
-            { x: '15%', y: '45%' },
-            { x: '65%', y: '45%' },
-          ];
-          const pos = positions[index];
-          
-          return (
+          {/* ── 로봇 마커 ── */}
+          {robotX !== null && robotY !== null && (
             <div
-              key={store.id}
-              className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer"
-              style={{ left: pos.x, top: pos.y }}
-              onMouseEnter={() => {
-                if (hoverTimeout) clearTimeout(hoverTimeout);
-                setHoveredStore(store.id);
-              }}
-              onMouseLeave={() => {
-                const t = setTimeout(() => setHoveredStore(null), 400);
-                setHoverTimeout(t);
-              }}
+              className="absolute transform -translate-x-1/2 -translate-y-1/2 z-30"
+              style={toMapPercent(robotX, robotY)}
             >
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${
-                highlightedStore === store.id
-                  ? 'bg-primary ring-4 ring-primary/40 scale-125'
-                  : store.open ? 'bg-card' : 'bg-slate-300'
-              }`}>
-                <span className={`material-icons-round ${
-                  highlightedStore === store.id ? 'text-white' : store.open ? 'text-primary' : 'text-slate-500'
-                }`}>{store.icon}</span>
-              </div>
-              {highlightedStore === store.id && (
-                <div className="absolute inset-0 w-10 h-10 rounded-full bg-primary/30 animate-ping" />
-              )}
-              <span className={`absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-xs font-semibold px-2 py-1 rounded-lg shadow-sm transition-all duration-300 ${
-                highlightedStore === store.id ? 'bg-primary text-white scale-110' : 'bg-card'
-              }`}>
-                {store.name}
-              </span>
-
-              {/* Popup on Hover */}
-              <div className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 transition-opacity z-[60] ${
-                hoveredStore === store.id ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-              }`}>
-                <div className="bg-card rounded-2xl p-4 shadow-xl border border-slate-200 dark:border-slate-700 w-56">
-                  <div className="flex items-center space-x-3 mb-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${store.open ? 'bg-primary/10' : 'bg-slate-100 dark:bg-slate-800'}`}>
-                      <span className={`material-icons-round ${store.open ? 'text-primary' : 'text-slate-400'}`}>{store.icon}</span>
-                    </div>
-                    <div>
-                      <p className="font-semibold text-foreground">{store.name}</p>
-                      <p className="text-xs text-muted-foreground">{store.category}</p>
-                    </div>
-                  </div>
-                  <p className="text-xs text-muted-foreground mb-3">{store.location}</p>
-                  <div className="flex items-center space-x-2 mb-3">
-                    <span className={`w-2 h-2 rounded-full ${store.open ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                    <span className="text-xs font-medium">{store.open ? 'Open' : 'Closed'}</span>
-                  </div>
-                  {store.open && (
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleAddToGuide(store)}
-                        className="flex-1 btn-secondary text-xs py-2"
-                      >
-                        <span className="material-icons-round text-sm mr-1">alt_route</span>
-                        Guide
-                      </button>
-                      {hasEmptySlot && (
-                        <button
-                          onClick={() => handleOrderPickup(store)}
-                          className="flex-1 btn-primary text-xs py-2"
-                        >
-                          <span className="material-icons-round text-sm mr-1">shopping_bag</span>
-                          Pickup
-                        </button>
-                      )}
-                    </div>
-                  )}
+              <div className="relative">
+                <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center shadow-lg">
+                  <span className="material-icons-round text-white">smart_toy</span>
+                </div>
+                <div className="absolute inset-0 rounded-full bg-primary/30 animate-ping" />
+                <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 bg-foreground text-background text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">
+                  {robotName}
                 </div>
               </div>
             </div>
-          );
-        })}
+          )}
 
-        {/* Legend */}
-        <div className="absolute bottom-4 left-4 bg-card/90 backdrop-blur-sm rounded-2xl p-4 shadow-lg border border-slate-200 dark:border-slate-700">
-          <p className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wide">Legend</p>
-          <div className="space-y-2">
-            <div className="flex items-center space-x-2">
-              <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center">
-                <span className="material-icons-round text-white text-xs">smart_toy</span>
+          {/* ── POI 마커 ── */}
+          {pois.map((poi) => {
+            const pos          = toMapPercent(poi.x_m, poi.y_m);
+            const isHighlighted = highlightedPoi === poi.id;
+            const isHovered     = hoveredPoi     === poi.id;
+
+            return (
+              <div
+                key={poi.id}
+                className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-10"
+                style={pos}
+                onMouseEnter={() => {
+                  if (hoverTimeout) clearTimeout(hoverTimeout);
+                  setHoveredPoi(poi.id);
+                }}
+                onMouseLeave={() => {
+                  const t = setTimeout(() => setHoveredPoi(null), 400);
+                  setHoverTimeout(t);
+                }}
+              >
+                {/* 마커 원 */}
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${
+                  isHighlighted
+                    ? 'bg-primary ring-4 ring-primary/40 scale-125'
+                    : 'bg-card'
+                }`}>
+                  <span className={`material-icons-round text-sm ${
+                    isHighlighted ? 'text-white' : 'text-primary'
+                  }`}>
+                    {poiIcon(poi.type)}
+                  </span>
+                </div>
+                {isHighlighted && (
+                  <div className="absolute inset-0 w-9 h-9 rounded-full bg-primary/30 animate-ping" />
+                )}
+                {/* 이름 라벨 */}
+                <span className={`absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded-lg shadow-sm transition-all duration-300 ${
+                  isHighlighted ? 'bg-primary text-white scale-110' : 'bg-card text-foreground'
+                }`}>
+                  {poi.name}
+                </span>
+
+                {/* ── 호버 팝업 ── */}
+                {isHovered && (
+                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-[60]">
+                    <div className="bg-card rounded-2xl p-4 shadow-xl border border-slate-200 dark:border-slate-700 w-52">
+                      <div className="flex items-center space-x-3 mb-3">
+                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                          <span className="material-icons-round text-primary">{poiIcon(poi.type)}</span>
+                        </div>
+                        <div>
+                          <p className="font-semibold text-foreground text-sm">{poi.name}</p>
+                          <p className="text-xs text-muted-foreground">{poi.type}</p>
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono mb-3">
+                        {poi.x_m.toFixed(3)}m, {poi.y_m.toFixed(3)}m
+                      </p>
+                      <div className="flex space-x-2">
+                        <button
+                          onClick={() => handleAddToGuide(poi)}
+                          className="flex-1 btn-secondary text-xs py-2 flex items-center justify-center gap-1"
+                        >
+                          <span className="material-icons-round text-sm">alt_route</span>
+                          Guide
+                        </button>
+                        {hasEmptySlot && (
+                          <button
+                            onClick={() => handleOrderPickup(poi)}
+                            className="flex-1 btn-primary text-xs py-2 flex items-center justify-center gap-1"
+                          >
+                            <span className="material-icons-round text-sm">shopping_bag</span>
+                            Pickup
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
-              <span className="text-xs text-foreground">Robot</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <div className="w-6 h-6 rounded-full bg-card border border-primary flex items-center justify-center">
-                <span className="material-icons-round text-primary text-xs">store</span>
-              </div>
-              <span className="text-xs text-foreground">Store (Open)</span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <div className="w-6 h-6 rounded-full bg-slate-300 flex items-center justify-center">
-                <span className="material-icons-round text-slate-500 text-xs">store</span>
-              </div>
-              <span className="text-xs text-foreground">Store (Closed)</span>
-            </div>
+            );
+          })}
+
+          {/* ── 축척 표시 ── */}
+          <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-card/80 backdrop-blur-sm rounded-lg px-2 py-1">
+            <div className="h-[2px] w-8 bg-foreground/60" />
+            <span className="text-[9px] text-foreground/60 font-medium">0.5m</span>
           </div>
         </div>
+      </div>
 
-        {/* Floor Selector */}
-        <div className="absolute top-4 right-4 bg-card/90 backdrop-blur-sm rounded-xl p-2 shadow-lg border border-slate-200 dark:border-slate-700">
-          <div className="flex flex-col space-y-1">
-            {['L2', 'L1', 'GF'].map((floor, index) => (
-              <button
-                key={floor}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
-                  index === 1 ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {floor}
-              </button>
-            ))}
+      {/* ── 범례 ── */}
+      <div className="mt-3 bg-card/90 backdrop-blur-sm rounded-2xl p-3 shadow-lg border border-slate-200 dark:border-slate-700">
+        <div className="flex items-center gap-4">
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Legend</p>
+          <div className="flex items-center gap-1.5">
+            <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+              <span className="material-icons-round text-white text-xs">smart_toy</span>
+            </div>
+            <span className="text-xs text-foreground">Robot</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-5 h-5 rounded-full bg-card border border-primary flex items-center justify-center">
+              <span className="material-icons-round text-primary text-xs">storefront</span>
+            </div>
+            <span className="text-xs text-foreground">POI</span>
+          </div>
+          <div className="ml-auto text-xs text-muted-foreground font-mono">2.5m × 2.0m</div>
         </div>
       </div>
     </div>

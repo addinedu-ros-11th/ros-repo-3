@@ -1,42 +1,53 @@
+// malle_web_service/ui/robot/src/pages/LockboxPage.tsx
+import { useEffect, useState } from 'react';
 import { useRobotStore } from '@/stores/robotStore';
-import { useState, useEffect } from 'react';
 import type { LockboxSlot } from '@/types/robot';
 
 export function LockboxPage() {
-  const { lockboxSlots, lockboxLogs, openSlot, updateSlotStatus, addLockboxLog, pendingLockboxSlot, setPendingLockboxSlot, initLockboxSlots } = useRobotStore();
+  const {
+    lockboxSlots,
+    lockboxLogs,
+    openSlot,
+    updateSlotStatus,
+    addLockboxLog,
+    pendingLockboxSlot,
+    setPendingLockboxSlot,
+    initLockboxSlots,
+  } = useRobotStore();
+
   const [selectedSlot, setSelectedSlot] = useState<LockboxSlot | null>(null);
   const [showOpenDialog, setShowOpenDialog] = useState(false);
   const [showTokenDialog, setShowTokenDialog] = useState(false);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
   const [token, setToken] = useState('');
   const [tokenError, setTokenError] = useState(false);
 
-  // 마운트 시 서버에서 실제 슬롯 상태 로드
-  // useEffect(() => {
-  //   initLockboxSlots();
-  // }, []);
-
-  // Check for pending lockbox slot from voice command
+  // If voice command set a pending slot, open its dialog (but not for RESERVED; allow PICKEDUP/FULL too)
   useEffect(() => {
     if (pendingLockboxSlot) {
       const slot = lockboxSlots.find(s => s.number === pendingLockboxSlot);
       if (slot && slot.status !== 'RESERVED') {
         setSelectedSlot(slot);
         setShowOpenDialog(true);
+        setPendingLockboxSlot(null);
       }
-      setPendingLockboxSlot(null);
     }
-  }, [pendingLockboxSlot]);
+  }, [pendingLockboxSlot, lockboxSlots]);
 
   const handleSlotClick = (slot: LockboxSlot) => {
+    // RESERVED는 열면 안 됨. PICKEDUP은 고객 수령 대기 상태라 오픈 허용.
     if (slot.status === 'RESERVED') return;
     setSelectedSlot(slot);
     setShowOpenDialog(true);
   };
 
   const handleOpenSlot = () => {
+    if (!selectedSlot) return;
     setShowOpenDialog(false);
     setShowTokenDialog(true);
+    setToken('');
+    setTokenError(false);
   };
 
   const handleTokenKeyPress = (digit: string) => {
@@ -52,46 +63,73 @@ export function LockboxPage() {
   };
 
   const handleTokenConfirm = () => {
-    if (token.length === 4 && selectedSlot) {
-      // Demo: Accept any 4-digit token
-      openSlot(selectedSlot.number);
-      setShowTokenDialog(false);
-      setToken('');
-      
-      // Simulate door close after delay
-      setTimeout(() => {
-        setShowConfirmDialog(true);
-      }, 1500);
-    } else {
-      setTokenError(true);
-    }
+    if (!selectedSlot) return;
+
+    // TODO: 실제 토큰 검증 연동 시 여기서 API 호출
+    // 현재는 데모 통과 처리
+    if (token.length !== 4) return;
+
+    setShowTokenDialog(false);
+    setShowConfirmDialog(true);
+
+    // Open 액션 로그
+    addLockboxLog({
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      slotNumber: selectedSlot.number,
+      action: 'OPENED',
+      result: 'SUCCESS',
+      description: `Slot ${selectedSlot.number} opened`,
+    });
+
+    openSlot(selectedSlot.number);
   };
 
   const handleConfirmStorage = (stored: boolean) => {
-    if (selectedSlot) {
-      if (stored) {
-        updateSlotStatus(selectedSlot.number, 'FULL');
-        addLockboxLog({
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          slotNumber: selectedSlot.number,
-          action: 'SECURED',
-          result: 'SUCCESS',
-          description: `Slot ${selectedSlot.number} secured with items`,
-        });
-      } else {
-        updateSlotStatus(selectedSlot.number, 'EMPTY');
-        addLockboxLog({
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          slotNumber: selectedSlot.number,
-          action: 'SECURED',
-          result: 'SUCCESS',
-          description: `Slot ${selectedSlot.number} remains empty`,
-        });
-      }
+    if (!selectedSlot) return;
+
+    if (stored) {
+      // Yes, Stored — 어떤 상태든 물건을 넣은 거니까 FULL
+      updateSlotStatus(selectedSlot.number, 'FULL');
+    } else {
+      // No — 물건 안 넣음/꺼냄 → EMPTY
+      updateSlotStatus(selectedSlot.number, 'EMPTY');
     }
+
     setShowConfirmDialog(false);
     setSelectedSlot(null);
   };
+
+  const getSlotClass = (slot: LockboxSlot) => {
+    if (slot.status === 'FULL' && slot.isPickupOrder) return 'slot-pickup';
+    if (slot.status === 'FULL') return 'slot-full';
+    if (slot.status === 'RESERVED') return 'slot-reserved';
+    if (slot.status === 'PICKEDUP') return 'slot-pickedup'; // ✅ 추가: CSS 없으면 slot-pickup 써도 됨
+    return 'slot-empty';
+  };
+
+  const getSlotIcon = (slot: LockboxSlot) => {
+    if (slot.status === 'EMPTY') return 'add_circle_outline';
+    if (slot.status === 'RESERVED') return 'shopping_bag';
+    if (slot.status === 'PICKEDUP') return 'local_shipping'; // ✅ pickup 적재 완료 느낌
+    return 'inventory_2'; // FULL
+  };
+
+  const getSlotLabel = (slot: LockboxSlot) => {
+    if (slot.status === 'PICKEDUP') return 'Picked up';
+    if (slot.status === 'FULL') return 'Full';
+    if (slot.status === 'RESERVED') return 'Reserved';
+    return 'Empty';
+  };
+
+  const getSlotColor = (status: LockboxSlot['status']) => {
+    switch (status) {
+      case 'FULL': return 'bg-card-dark-blue dark:bg-blue-700';
+      case 'PICKEDUP': return 'bg-gradient-to-br from-emerald-500 to-teal-600 dark:from-emerald-600 dark:to-teal-700';
+      case 'RESERVED': return 'bg-card-pink dark:bg-pink-600';
+      case 'EMPTY': return 'bg-muted border-2 border-dashed border-muted-foreground/30';
+      default: return 'bg-muted';
+    }
+  };  
 
   return (
     <div>
@@ -103,60 +141,55 @@ export function LockboxPage() {
           <button
             key={slot.number}
             onClick={() => handleSlotClick(slot)}
-            disabled={slot.status === 'RESERVED'}
-            className={`h-52 ${
-              slot.status === 'FULL' && slot.isPickupOrder
-                ? 'slot-pickup'
-                : slot.status === 'FULL'
-                ? 'slot-full'
-                : slot.status === 'RESERVED'
-                ? 'slot-reserved'
-                : 'slot-empty'
-            }`}
+            disabled={slot.status === 'RESERVED'}  // RESERVED만 막고 PICKEDUP은 허용
+            className={`h-52 ${getSlotClass(slot)}`}
           >
             <div className="absolute -right-4 -top-4 w-24 h-24 bg-white/10 rounded-full blur-2xl" />
             <div className="relative z-10 h-full flex flex-col">
-              <span className={`self-start px-2 py-1 rounded-lg text-[10px] font-bold uppercase backdrop-blur-sm ${
-                slot.status === 'EMPTY' ? 'bg-slate-200 text-slate-600' : 'bg-black/20 text-white'
-              }`}>
+              <span
+                className={`self-start px-2 py-1 rounded-lg text-[10px] font-bold uppercase backdrop-blur-sm ${
+                  slot.status === 'EMPTY' ? 'bg-slate-200 text-slate-600' : 'bg-black/20 text-white'
+                }`}
+              >
                 Slot {slot.number}
               </span>
 
               <div className="flex-1 flex flex-col items-center justify-center">
-                <span className={`material-icons-round text-3xl mb-2 ${
-                  slot.status === 'EMPTY' ? 'text-slate-400' : 'text-white/80'
-                }`}>
-                  {slot.status === 'EMPTY' ? 'add_circle_outline' : slot.status === 'RESERVED' ? 'shopping_bag' : 'inventory_2'}
+                <span
+                  className={`material-icons-round text-3xl mb-2 ${
+                    slot.status === 'EMPTY' ? 'text-slate-400' : 'text-white/80'
+                  }`}
+                >
+                  {getSlotIcon(slot)}
                 </span>
+
                 <span className={`text-xl font-bold ${slot.status === 'EMPTY' ? 'text-slate-500' : 'text-white'}`}>
-                  {slot.status === 'FULL' && slot.pickedUp ? 'Picked up' : slot.status === 'FULL' ? 'Full' : slot.status === 'RESERVED' ? 'Reserved' : 'Empty'}
+                  {getSlotLabel(slot)}
                 </span>
-                {slot.status === 'FULL' && slot.isPickupOrder && slot.orderInfo && (
-                  // <div className="mt-1 text-center">
-                  //   <span className="text-[10px] text-white/70 block">{slot.orderInfo.orderId}</span>
-                  //   <span className="text-[10px] text-white/70 block">{slot.orderInfo.storeName}</span>
-                  // </div>
+
+                {/* 주문 정보 */}
+                {(slot.status === 'FULL' || slot.status === 'RESERVED' || slot.status === 'PICKEDUP') && slot.orderInfo && (
                   <span className="text-xs text-white/70 mt-1">
                     {slot.orderInfo.orderId} • {slot.orderInfo.storeName}
                   </span>
                 )}
+
+                {/* 일반 FULL 보관 시간 */}
                 {slot.status === 'FULL' && !slot.isPickupOrder && slot.occupiedSince && (
                   <span className="text-xs text-white/70 mt-1">Since {slot.occupiedSince}</span>
                 )}
-                {slot.status === 'RESERVED' && slot.orderInfo && (
-                  <span className="text-xs text-white/70 mt-1">
-                    {slot.orderInfo.orderId} • {slot.orderInfo.storeName}
-                  </span>
-                )}
               </div>
 
-              {(slot.status === 'FULL' || slot.status === 'EMPTY') && (
+              {/* Open 버튼: EMPTY/FULL/PICKEDUP 에서 보여주기 */}
+              {(slot.status === 'FULL' || slot.status === 'EMPTY' || slot.status === 'PICKEDUP') && (
                 <div className="space-y-2">
-                  <button className={`w-full py-2 rounded-xl text-sm font-bold transition-all ${
-                    slot.status === 'EMPTY' 
-                      ? 'bg-slate-300 text-slate-700 hover:bg-slate-400' 
-                      : 'bg-white/20 text-white hover:bg-white/30'
-                  }`}>
+                  <button
+                    className={`w-full py-2 rounded-xl text-sm font-bold transition-all ${
+                      slot.status === 'EMPTY'
+                        ? 'bg-slate-300 text-slate-700 hover:bg-slate-400'
+                        : 'bg-white/20 text-white hover:bg-white/30'
+                    }`}
+                  >
                     <span className="material-icons-round text-sm mr-1 align-middle">lock_open</span>
                     Open
                   </button>

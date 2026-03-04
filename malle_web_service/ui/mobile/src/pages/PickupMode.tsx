@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppStore, PickupStatus } from '@/store/appStore';
+import { pickupApi } from '@/api/services';
 
 const pickupSteps = [
   { status: 'MOVING', label: 'Robot Moving', icon: 'near_me' },
@@ -43,11 +44,11 @@ export default function PickupMode() {
     return 'store';
   });
   const [selectedStore, setSelectedStore] = useState<string | null>(preStore);
-  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number }[]>(() => {
+  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number; productId?: number }[]>(() => {
     if (preStore && preItem) {
       const products = storeProductsData[preStore];
       const found = products?.find(p => p.name === preItem);
-      if (found) return [{ name: found.name, quantity: 1, price: found.price }];
+      if (found) return [{ name: found.name, quantity: 1, price: found.price, productId: found.productId }];
     }
     return [];
   });
@@ -70,14 +71,14 @@ export default function PickupMode() {
     setStep('items');
   };
 
-  const handleAddItem = (product: { name: string; price: number }) => {
+  const handleAddItem = (product: { name: string; price: number; productId?: number }) => {
     const existing = selectedItems.find(i => i.name === product.name);
     if (existing) {
       setSelectedItems(items => 
         items.map(i => i.name === product.name ? { ...i, quantity: i.quantity + 1 } : i)
       );
     } else {
-      setSelectedItems(items => [...items, { ...product, quantity: 1 }]);
+      setSelectedItems(items => [...items, { name: product.name, price: product.price, productId: product.productId, quantity: 1 }]);
     }
   };
 
@@ -111,9 +112,9 @@ export default function PickupMode() {
   // Find which slot is used for this pickup (use first RESERVED or first EMPTY)
   const getPickupSlot = () => {
     const reserved = lockboxSlots.find(s => s.status === 'RESERVED');
-    if (reserved) return reserved.slotNumber;
+    if (reserved) return reserved.number;
     const empty = lockboxSlots.find(s => s.status === 'EMPTY');
-    return empty?.slotNumber || 4;
+    return empty?.number || 4;
   };
 
   const handleOpenLockbox = () => {
@@ -129,10 +130,14 @@ export default function PickupMode() {
     navigate('/task-complete');
   };
 
+  // Robot이 주문을 생성하면 (WS로 pickupOrder가 새로 설정됨) 자동으로 tracking 뷰로 전환
+  useEffect(() => {
+    if (pickupOrder && pickupOrder.status !== 'IDLE' && pickupOrder.status !== 'DONE' && step !== 'tracking') {
+      setStep('tracking');
+    }
+  }, [pickupOrder]);
+
   // Task mode: show lockbox retrieval after DONE
-  // if (step === 'tracking' && pickupOrder?.status === 'DONE' && isTaskMode && !showLockboxRetrieval) {
-  //   setShowLockboxRetrieval(true);
-  // }
   useEffect(() => {
     if (step === 'tracking' && pickupOrder?.status === 'DONE' && isTaskMode && !showLockboxRetrieval) {
       setShowLockboxRetrieval(true);
@@ -288,13 +293,21 @@ export default function PickupMode() {
               <h3 className="font-bold text-foreground text-center">Choose a Meet-up Point</h3>
               <p className="text-xs text-muted-foreground text-center mb-2">Select where you'd like to meet the robot</p>
               <div className="space-y-2 max-h-72 overflow-y-auto">
-                {pois.filter(p => p.id > 9).map((poi) => (
+                {pois.filter(p => Number(p.id) > 9).map((poi) => (
                   <button
                     key={poi.id}
                     onClick={() => {
                       setMeetupLocation(poi.name);
                       setPickupStatus('RETURNING');
                       setShowMeetupOverlay(false);
+                      // 서버에 meetup 위치 전달 → Robot이 PICKUP_MEET_SET 수신
+                      const { currentSessionId, pickupOrder: order } = useAppStore.getState();
+                      if (currentSessionId && order?.serverOrderId) {
+                        pickupApi.setMeet(currentSessionId, order.serverOrderId, {
+                          meet_type: 'POI',
+                          meet_poi_id: Number(poi.id),
+                        }).catch(() => {});
+                      }
                     }}
                     className="w-full flex items-center gap-3 p-3 rounded-xl bg-muted/50 hover:bg-muted active:scale-[0.98] transition-all text-left"
                   >
@@ -397,7 +410,7 @@ export default function PickupMode() {
       {/* Item Selection */}
       {step === 'items' && selectedStore && (
         <div className="space-y-3">
-          {storeProducts[selectedStore]?.map((product) => {
+          {storeProductsData[selectedStore]?.map((product) => {
             const inCart = selectedItems.find(i => i.name === product.name);
             return (
               <div 
