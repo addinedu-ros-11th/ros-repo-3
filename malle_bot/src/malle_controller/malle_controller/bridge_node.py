@@ -503,7 +503,7 @@ def main():
 
         try:
             from malle_controller.mission_executor import MissionExecutor
-            executor = MissionExecutor(api_base_url=MALLE_SERVICE_URL)
+            executor = MissionExecutor()
             _mission_executor = executor
             print("[bridge_node] MissionExecutor 로드 완료")
         except Exception as e:
