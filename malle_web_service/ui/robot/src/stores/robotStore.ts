@@ -468,7 +468,11 @@ export const useRobotStore = create<RobotStore>((set, get) => ({
           .create(state.currentSessionId, {
             pickup_poi_id,
             created_channel: 'ROBOT',
-            items: order.items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })),
+            items: order.items.map((it) => ({
+                product_id: it.productId ?? 0,
+                qty: it.quantity,
+                unit_price: it.price,
+            })),
           })
           .then((res) => {
             set((s) => ({

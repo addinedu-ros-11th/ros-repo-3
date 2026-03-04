@@ -92,27 +92,23 @@ class MissionErrandNode(Node, NavCore):
             self.stop()
 
     def _go_to_poi(self, poi_id: str, done_cb):
-        poi = self._poi_mgr.get(poi_id)
-        if poi is None:
-            self.get_logger().error(f'[MissionErrand] POI 없음: {poi_id}')
-            self._publish_result('exception')
-            return
-        self.navigate_to_pose(poi['x'], poi['y'], poi.get('yaw', 0.0),
-                              done_callback=done_cb)
+        ...
+        self.navigate_via_waypoints(
+            target_x=poi['x'], target_y=poi['y'], target_yaw=poi.get('yaw', 0.0),
+            done_callback=done_cb,
+        )
 
-    def _on_store_arrived(self, future):
-        if future.result().status == 4:
+    def _on_store_arrived(self, success: bool):
+        if success:
             self._transition(ErrandState.BOX_EMPTY)
         else:
-            self.get_logger().warn('[MissionErrand] 매장 이동 실패')
             self._publish_result('exception')
 
-    def _on_meetup_arrived(self, future):
-        if future.result().status == 4:
+    def _on_meetup_arrived(self, success: bool):
+        if success:
             self._transition(ErrandState.BOX_FULL)
-            self._publish_result('user_auth_done')   # TODO: 실제 인증 후 전송
+            self._publish_result('user_auth_done')
         else:
-            self.get_logger().warn('[MissionErrand] meet-up 이동 실패')
             self._publish_result('exception')
 
     def _open_box(self):
