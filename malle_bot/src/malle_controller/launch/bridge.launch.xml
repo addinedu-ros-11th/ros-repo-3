@@ -1,6 +1,6 @@
 <launch>
   <!--
-    bridge.launch.xml  –  로컬 PC(malle_service 쪽)에서 실행
+    bridge.launch.xml  –  로봇에서 실행 (PC의 malle_service 와 HTTP 통신)
 
     전제 조건:
       1. ROS_DOMAIN_ID 가 로봇과 동일하게 설정되어 있을 것
@@ -9,17 +9,22 @@
       2. 로봇과 같은 서브넷이거나 DDS peer 가 설정되어 있을 것
          (다른 서브넷이면: export ROS_STATIC_PEERS=<robot-ip>)
 
-      3. malle_service 가 로컬에서 실행 중일 것 (기본 8000 포트)
+      3. malle_service 가 PC에서 실행 중일 것 (기본 8000 포트)
 
     실행:
-      ros2 launch malle_controller bridge.launch.xml
-      ros2 launch malle_controller bridge.launch.xml malle_service_url:=http://192.168.0.10:8000/api/v1
-      ros2 launch malle_controller bridge.launch.xml robot_ns_map:=robot1:1,robot2:2
+      ros2 launch malle_controller bridge.launch.xml \
+        malle_service_url:=http://<PC_IP>:8000/api/v1 \
+        robot_id:=1 robot_namespace:=malle_15
+
+      ros2 launch malle_controller bridge.launch.xml \
+        malle_service_url:=http://<PC_IP>:8000/api/v1 \
+        robot_id:=2 robot_namespace:=malle_17
   -->
 
-  <arg name="malle_service_url" default="http://localhost:8000"/>
+  <arg name="malle_service_url" default="http://localhost:8000/api/v1"/>
   <arg name="bridge_http_port"  default="9100"/>
-  <arg name="robot_ns_map"      default="robot1:1"/>
+  <arg name="robot_id"          default="1"/>
+  <arg name="robot_namespace"   default="malle_15"/>
 
   <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
         output="screen">
@@ -29,6 +34,7 @@
     -->
     <env name="MALLE_SERVICE_URL" value="$(var malle_service_url)"/>
     <env name="BRIDGE_HTTP_PORT"  value="$(var bridge_http_port)"/>
-    <env name="ROBOT_NS_MAP"      value="$(var robot_ns_map)"/>
+    <env name="ROBOT_ID"          value="$(var robot_id)"/>
+    <env name="ROBOT_NAMESPACE"   value="$(var robot_namespace)"/>
   </node>
 </launch>
