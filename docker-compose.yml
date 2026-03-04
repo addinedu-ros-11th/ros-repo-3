@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # --- MySQL ---
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: malle
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_unicode_ci
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- Main API + WebSocket ---
+  malle-service:
+    build:
+      context: ./malle_service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DB_URL: mysql+aiomysql://root:password@db:3306/malle
+      AI_SERVICE_URL: http://malle-ai:5000
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8001
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # --- AI Service ---
+  malle-ai:
+    build:
+      context: ./malle_ai_service
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+
+  # --- Web Service (SPA serving) ---
+  malle-web:
+    build:
+      context: ./malle_web_service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    depends_on:
+      - malle-service
+    restart: unless-stopped
+
+  # --- Bridge Node (HTTP-only mode, no ROS2) ---
+  # For production with ROS2, run bridge_node.py natively on the robot host.
+  malle-bridge:
+    build:
+      context: ./malle_bot
+      dockerfile: Dockerfile
+    ports:
+      - "9100:9100"
+    environment:
+      MALLE_SERVICE_URL: http://malle-service:8000/api/v1
+    depends_on:
+      - malle-service
+    restart: unless-stopped
+
+volumes:
+  mysql_data:

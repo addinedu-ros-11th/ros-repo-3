@@ -1,303 +1,35 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로봇 모니터링 대시보드</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #1a1a1a;
-            color: #fff;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        h1 {
-            text-align: center;
-            margin-bottom: 30px;
-            color: #4CAF50;
-        }
-        
-        .status {
-            background: #2a2a2a;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            border-left: 4px solid #4CAF50;
-        }
-        
-        .message-list {
-            background: #2a2a2a;
-            border-radius: 8px;
-            padding: 20px;
-            max-height: 600px;
-            overflow-y: auto;
-        }
-        
-        .message-item {
-            background: #3a3a3a;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 6px;
-            border-left: 3px solid #2196F3;
-            animation: slideIn 0.3s ease;
-        }
-        
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateX(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateX(0);
-            }
-        }
-        
-        .message-header {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            font-weight: bold;
-        }
-        
-        .timing-section {
-            background: #2a2a2a;
-            padding: 10px;
-            border-radius: 6px;
-            margin-bottom: 10px;
-        }
-        
-        .timing-title {
-            color: #4CAF50;
-            font-weight: bold;
-            margin-bottom: 8px;
-            font-size: 14px;
-        }
-        
-        .timing-items {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
-        }
-        
-        .timing-item {
-            background: #3a3a3a;
-            padding: 8px;
-            border-radius: 4px;
-            text-align: center;
-        }
-        
-        .timing-label {
-            color: #888;
-            font-size: 11px;
-            margin-bottom: 4px;
-        }
-        
-        .timing-value {
-            color: #2196F3;
-            font-weight: bold;
-            font-size: 16px;
-        }
-        
-        .timing-total {
-            background: #4a4a4a;
-        }
-        
-        .timing-total .timing-value {
-            color: #4CAF50;
-            font-size: 18px;
-        }
-        
-        .message-body {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
-            font-size: 14px;
-        }
-        
-        .field {
-            background: #2a2a2a;
-            padding: 8px;
-            border-radius: 4px;
-        }
-        
-        .field-label {
-            color: #888;
-            font-size: 12px;
-        }
-        
-        .field-value {
-            color: #fff;
-            font-weight: bold;
-            margin-top: 4px;
-        }
-        
-        .status-good {
-            color: #4CAF50;
-        }
-        
-        .status-low {
-            color: #ff9800;
-        }
-        
-        .connection-status {
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        
-        .connected {
-            background: #4CAF50;
-        }
-        
-        .disconnected {
-            background: #f44336;
-        }
-    </style>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mall-E — Fleet Management System</title>
+    <meta name="description" content="Mall-E Operator Dashboard for smart shopping robot fleet management">
+    <meta name="author" content="Garam Lee" />
+    
+    
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/87823e2c-2522-472f-9f73-a228c356e074/id-preview-2c89b291--d4056d9d-d702-4d13-9012-14c84b326036.lovable.app-1771081090650.png">
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/87823e2c-2522-472f-9f73-a228c356e074/id-preview-2c89b291--d4056d9d-d702-4d13-9012-14c84b326036.lovable.app-1771081090650.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
+    
+  
+  
+  
+  <meta property="og:title" content="Mall-E — Fleet Management System">
+  <meta name="twitter:title" content="Mall-E — Fleet Management System">
+  <meta property="og:description" content="Mall-E Operator Dashboard for smart shopping robot fleet management">
+  <meta name="twitter:description" content="Mall-E Operator Dashboard for smart shopping robot fleet management">
 </head>
-<body>
-    <div class="container">
-        <h1>🤖 로봇 모니터링 대시보드</h1>
-        
-        <div class="status">
-            <div>
-                WebSocket 연결: 
-                <span id="connection-status" class="connection-status disconnected">연결 끊김</span>
-            </div>
-            <div style="margin-top: 10px;">
-                수신 메시지 수: <strong id="message-count">0</strong>
-            </div>
-        </div>
-        
-        <div class="message-list" id="message-list">
-            <p style="text-align: center; color: #888;">메시지를 기다리는 중...</p>
-        </div>
-    </div>
-
-    <script>
-        let ws;
-        let messageCount = 0;
-        const messageList = document.getElementById('message-list');
-        const connectionStatus = document.getElementById('connection-status');
-        const messageCountEl = document.getElementById('message-count');
-
-        function connectWebSocket() {
-            ws = new WebSocket('ws://localhost:8001/ws');
-            
-            ws.onopen = function() {
-                console.log('WebSocket 연결됨 (포트 8001)');
-                connectionStatus.textContent = '연결됨';
-                connectionStatus.className = 'connection-status connected';
-            };
-            
-            ws.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                console.log('메시지 수신:', data);
-                
-                if (data.type === 'robot_update') {
-                    addMessage(data.data);
-                }
-            };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket 오류:', error);
-            };
-            
-            ws.onclose = function() {
-                console.log('WebSocket 연결 끊김');
-                connectionStatus.textContent = '연결 끊김';
-                connectionStatus.className = 'connection-status disconnected';
-                
-                setTimeout(connectWebSocket, 3000);
-            };
-        }
-        
-        function addMessage(data) {
-            messageCount++;
-            messageCountEl.textContent = messageCount;
-            
-            if (messageCount === 1) {
-                messageList.innerHTML = '';
-            }
-            
-            console.log('받은 데이터:', data);
-            
-            const aiResult = data.ai_result;
-            const timing = data.timing;
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message-item';
-            
-            const batteryStatus = aiResult.ai_analysis.battery_status === 'good' ? 'status-good' : 'status-low';
-            
-            messageDiv.innerHTML = `
-                <div class="message-header">
-                    <span>메시지 #${messageCount}</span>
-                    <span style="color: #888;">${new Date(data.received_at).toLocaleTimeString('ko-KR')}</span>
-                </div>
-                
-                <div class="timing-section">
-                    <div class="timing-title">⏱️ 단계별 처리 시간</div>
-                    <div class="timing-items">
-                        <div class="timing-item">
-                            <div class="timing-label">ROS 수신</div>
-                            <div class="timing-value">${timing.ros_receive.toFixed(3)}초</div>
-                        </div>
-                        <div class="timing-item">
-                            <div class="timing-label">AI 처리</div>
-                            <div class="timing-value">${timing.ai_processing.toFixed(3)}초</div>
-                        </div>
-                        <div class="timing-item">
-                            <div class="timing-label">웹 전송</div>
-                            <div class="timing-value">${timing.web_transfer.toFixed(3)}초</div>
-                        </div>
-                        <div class="timing-item timing-total">
-                            <div class="timing-label">전체</div>
-                            <div class="timing-value">${timing.total.toFixed(3)}초</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="message-body">
-                    <div class="field">
-                        <div class="field-label">로봇 ID</div>
-                        <div class="field-value">${aiResult.robot_id}</div>
-                    </div>
-                    <div class="field">
-                        <div class="field-label">배터리</div>
-                        <div class="field-value ${batteryStatus}">${aiResult.ai_analysis.battery_status.toUpperCase()}</div>
-                    </div>
-                    <div class="field">
-                        <div class="field-label">AI 분석</div>
-                        <div class="field-value">${aiResult.ai_analysis.recommendation}</div>
-                    </div>
-                    <div class="field">
-                        <div class="field-label">메시지 ID</div>
-                        <div class="field-value" style="font-size: 11px;">${data.message_id.substring(0, 8)}...</div>
-                    </div>
-                </div>
-            `;
-            
-            messageList.insertBefore(messageDiv, messageList.firstChild);
-            
-            while (messageList.children.length > 50) {
-                messageList.removeChild(messageList.lastChild);
-            }
-        }
-        
-        connectWebSocket();
-    </script>
-</body>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

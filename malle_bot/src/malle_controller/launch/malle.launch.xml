@@ -1,18 +1,11 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
-  <arg name="robot_id"     default="malle_01"/>
-  <arg name="api_base_url" default="http://localhost:8000/api/v1"/>
-  <arg name="poll_hz"      default="1.0"/>
+  <arg name="robot_id"        default="malle_01"/>
+  <arg name="robot_ns"        default="robot1"/>
+  <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
+  <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
 
-  <!-- ===== bridge_node  –  malle_service ↔ ROS2 브릿지 ===== -->
-  <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
-        output="screen">
-    <param name="robot_id"     value="$(var robot_id)"/>
-    <param name="api_base_url" value="$(var api_base_url)"/>
-    <param name="poll_hz"      value="$(var poll_hz)"/>
-  </node>
-
-  <!-- ===== mission_executor  –  미션 상태 디스패처 ===== -->
+  <!-- ===== mission_executor  –  미션 상태 디스패처 + 카메라 + tag tracker 통합 실행 ===== -->
   <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
         output="screen">
     <param name="robot_id" value="$(var robot_id)"/>
@@ -24,28 +17,22 @@
     <param name="api_base_url" value="$(var api_base_url)"/>
   </node>
 
-  <!-- ===== mission_follow  –  팔로우 모드 ===== -->
-  <node pkg="malle_controller" exec="mission_follow" name="mission_follow"
-        output="screen"/>
-
   <!-- ===== mission_errand  –  심부름 모드 ===== -->
   <node pkg="malle_controller" exec="mission_errand" name="mission_errand"
         output="screen">
     <param name="api_base_url" value="$(var api_base_url)"/>
   </node>
 
-  <!-- ===== tag_tracker  –  AprilTag 추종 ===== -->
-  <node pkg="malle_controller" exec="tag_tracker" name="tag_tracker"
-        output="screen">
-    <!-- target_tag_id: -1 이면 아무 태그나 추종 -->
-    <param name="target_tag_id" value="-1"/>
-  </node>
-
   <!-- ===== lockbox_controller ===== -->
   <node pkg="malle_controller" exec="lockbox_controller" name="lockbox_controller"
         output="screen">
-    <!-- interface: mock | gpio | serial -->
-    <param name="interface" value="mock"/>
+    <param name="interface" value="$(var lockbox_iface)"/>
+  </node>
+
+  <!-- ===== topic_relay  –  /odom, /battery/present → /{robot_ns}/ ===== -->
+  <node pkg="malle_controller" exec="topic_relay" name="topic_relay"
+        output="screen">
+    <param name="robot_ns" value="$(var robot_ns)"/>
   </node>
 
   <!-- ===== battery_monitor ===== -->
