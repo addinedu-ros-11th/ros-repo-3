@@ -102,6 +102,8 @@ export default function FleetMapPage() {
             </defs>
             <rect width="450" height="380" fill="url(#dotGrid)" />
 
+            <image href="/map_end_end.png" x="0" y="0" width="450" height="380" preserveAspectRatio="xMidYMid meet" opacity="0.85" />
+
             {/* Zones */}
             {layers.zones && zones.map(zone => {
               const pts = zone.polygon.map(p => `${p.x},${p.y}`).join(' ');
