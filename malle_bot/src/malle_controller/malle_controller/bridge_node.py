@@ -93,7 +93,6 @@ except ImportError:
 # 전역 참조 (main()에서 주입)
 # ─────────────────────────────────────────────────────────────
 _ros_node = None
-_mission_executor = None
 
 
 class CameraFrameBuffer:
@@ -167,7 +166,6 @@ if HAS_FASTAPI:
             "robot_id": ROBOT_ID,
             "namespace": ROBOT_NAMESPACE,
             "camera": camera_buffer.get() is not None,
-            "mission_executor": _mission_executor is not None,
             "topics": {
                 "odom":           TOPIC_ODOM,
                 "battery":        TOPIC_BATTERY,
@@ -205,49 +203,36 @@ if HAS_FASTAPI:
     async def navigate_to(req: NavigateRequest):
         """
         malle_service → 이 엔드포인트 호출.
-        session_id 있으면 MissionExecutor.dispatch_guide() 사용,
+        session_id 있으면 TaskCommand를 /malle/command에 발행 (mission_executor가 처리).
         없으면 단순 좌표 이동.
         """
-        if not _mission_executor:
-            if _ros_node:
-                _ros_node.send_nav_goal(req.x, req.y, req.theta)
-            return {"ok": True, "mode": "fallback_nav"}
-
-        if req.session_id:
-            def _dispatch():
-                _mission_executor.dispatch_guide(req.session_id)
-            threading.Thread(target=_dispatch, daemon=True).start()
+        if req.session_id and _ros_node:
+            _ros_node.publish_task_command("GUIDE", str(req.session_id), "")
             return {"ok": True, "mode": "guide", "session_id": req.session_id}
-        else:
-            def _nav():
-                from malle_controller.nav_core import NavCore
-                if hasattr(_mission_executor, 'navigate_to_pose'):
-                    _mission_executor.navigate_to_pose(req.x, req.y, req.theta)
-            threading.Thread(target=_nav, daemon=True).start()
-            return {"ok": True, "mode": "direct_nav"}
+
+        if _ros_node:
+            _ros_node.send_nav_goal(req.x, req.y, req.theta)
+        return {"ok": True, "mode": "fallback_nav"}
 
     @bridge_app.post("/bridge/guide/advance")
     async def guide_advance():
-        if _mission_executor:
-            threading.Thread(
-                target=lambda: _mission_executor._guide.advance(),
-                daemon=True
-            ).start()
+        """다음 POI로 이동 (Robot UI 'Next Stop' / Mobile 'Mark as Arrived')."""
+        if _ros_node:
+            _ros_node.publish_guide_advance()
         return {"ok": True}
 
     @bridge_app.post("/bridge/guide/stop")
     async def guide_stop():
-        if _mission_executor:
-            _mission_executor._guide.stop()
+        if _ros_node:
+            _ros_node.publish_trigger("stop_guide")
         return {"ok": True}
 
     @bridge_app.post("/bridge/stop")
     async def stop_mission():
         """E-Stop 또는 세션 종료 시 모든 미션 중지."""
-        if _mission_executor:
-            _mission_executor.stop_all()
-        elif _ros_node:
+        if _ros_node:
             _ros_node.publish_cmd_vel(0.0, 0.0)
+            _ros_node.publish_trigger("idle")
         return {"ok": True}
     
     @bridge_app.post("/bridge/errand/start")
@@ -332,6 +317,7 @@ if HAS_FASTAPI:
 
 if HAS_ROS2:
     from sensor_msgs.msg import Image as RosImage
+    from malle_controller.msg import TaskCommand as TaskCommandMsg
 
     class BridgeNode(Node):
         def __init__(self):
@@ -353,10 +339,12 @@ if HAS_ROS2:
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
 
-            self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
-            self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
+            self._cmd_vel_pub = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
+            self._preempt_pub = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
             self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
+            self._malle_command_pub = self.create_publisher(TaskCommandMsg, '/malle/command', 10)
+            self._guide_advance_pub = self.create_publisher(String, '/malle/guide_advance', 10)
             self._nav2_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
@@ -436,7 +424,21 @@ if HAS_ROS2:
             """mission_follow.py 등 /malle/mission_trigger 구독자에게 명령 발행."""
             msg = String()
             msg.data = command
-            self._mission_trigger_pub.publish(msg)    
+            self._mission_trigger_pub.publish(msg)
+
+        def publish_task_command(self, task_type: str, task_id: str, poi_ids: str):
+            """mission_executor에게 TaskCommand 발행."""
+            msg = TaskCommandMsg()
+            msg.task_type = task_type
+            msg.task_id = task_id
+            msg.poi_ids = poi_ids
+            self._malle_command_pub.publish(msg)
+
+        def publish_guide_advance(self):
+            """/malle/guide_advance 발행 — mission_executor가 GuideExecutor.advance() 호출."""
+            msg = String()
+            msg.data = "advance"
+            self._guide_advance_pub.publish(msg)
 
         def send_nav_goal(self, x: float, y: float, theta: float):
             """Nav2 NavigateToPose 액션으로 직접 이동 명령."""
@@ -468,7 +470,7 @@ def run_http_server():
 
 
 def main():
-    global _ros_node, _mission_executor
+    global _ros_node
 
     # HTTP 서버 스레드
     threading.Thread(target=run_http_server, daemon=True).start()
@@ -483,19 +485,9 @@ def main():
         bridge = BridgeNode()
         _ros_node = bridge
 
-        try:
-            from malle_controller.mission_executor import MissionExecutor
-            executor = MissionExecutor(api_base_url=MALLE_SERVICE_URL)
-            _mission_executor = executor
-            print("[bridge_node] MissionExecutor 로드 완료")
-        except Exception as e:
-            print(f"[bridge_node] MissionExecutor 로드 실패: {e} — 폴백 모드")
-
         from rclpy.executors import MultiThreadedExecutor
         ros_executor = MultiThreadedExecutor()
         ros_executor.add_node(bridge)
-        if _mission_executor:
-            ros_executor.add_node(_mission_executor)
 
         try:
             ros_executor.spin()

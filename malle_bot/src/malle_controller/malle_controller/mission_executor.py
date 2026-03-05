@@ -85,6 +85,8 @@ class MissionExecutor(Node, NavCore):
             String, '/malle/battery_status', self._on_battery, 10)
         self.battery_pct_sub = self.create_subscription(
             Float32, '/battery/present', self._on_battery_pct, 10)
+        self.guide_advance_sub = self.create_subscription(
+            String, '/malle/guide_advance', self._on_guide_advance, 10)
 
         self.state_pub   = self.create_publisher(RobotMessage, '/malle/robot_state', 10)
         self.trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
@@ -165,7 +167,16 @@ class MissionExecutor(Node, NavCore):
 
     def _cmd_guide(self):
         if self.state in (RobotState.IDLE, RobotState.GUIDE, RobotState.FOLLOW):
-            self._transition(RobotState.GUIDE)
+            session_id_str = self.current_task_id
+            if not session_id_str.isdigit():
+                self.get_logger().warn(f"GUIDE 명령: 유효하지 않은 session_id '{session_id_str}'")
+                return
+            self.state = RobotState.GUIDE
+            session_id = int(session_id_str)
+            threading.Thread(
+                target=lambda: self.dispatch_guide(session_id),
+                daemon=True,
+            ).start()
         else:
             self.get_logger().warn(f"GUIDE 명령 무시 (현재: {self.state.name})")
 
@@ -209,6 +220,13 @@ class MissionExecutor(Node, NavCore):
             self._transition(next_state)
         else:
             self.get_logger().warn(f"처리되지 않은 result: '{result}' (state: {self.state.name})")
+
+    def _on_guide_advance(self, msg: String):
+        """bridge_node /bridge/guide/advance → 다음 POI로 이동."""
+        if self._guide.is_waiting:
+            threading.Thread(target=self._guide.advance, daemon=True).start()
+        else:
+            self.get_logger().warn('[MissionExecutor] guide_advance 수신 — 대기 중 아님, 무시')
 
     def _on_battery(self, msg: String):
         try:
