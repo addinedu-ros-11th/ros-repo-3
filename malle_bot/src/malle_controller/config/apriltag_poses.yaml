@@ -1,26 +1,49 @@
-# AprilTag 기반 yaw 교정 설정
-# nav_core.py에서 Nav2 이동 중 태그가 보이면 /initialpose 발행
-#
-# TODO: 실제 배치 후 tags 섹션의 yaw 값을 실측값으로 교체
-
 camera:
   fx: 570.34
   fy: 570.34
   cx: 320.0
   cy: 240.0
 
-tag_size: 0.05  # 태그 한 변 길이 (미터)
+tag_size: 0.05
 
 correction:
-  max_detect_dist: 0.3   # 태그까지 거리 상한 (미터) — 이 거리 이내일 때만 교정
-  max_angle_deg:   10.0  # 태그 정면 기준 허용 각도 (도) — 비스듬히 보일 때 스킵
-  cooldown_sec:    10.0  # 교정 후 재교정 최소 대기 시간 (초)
+  max_detect_dist: 0.3
+  max_angle_deg:   10.0
+  cooldown_sec:    10.0
 
 # tag_id: map 기준으로 태그가 바라보는 방향 (yaw, radians)
+# 실측값: 13, 16, 17번
+# 이론값(로봇 yaw + π): 나머지 — 실제 배치 후 실측 보정 권장
 tags:
   13:
-    yaw: 2.812   # ≈ 161.1도
+    yaw: 2.812   # 실측 완료
   16:
-    yaw: 4.709   # ≈ 269.8도
+    yaw: 4.709   # 실측 완료
   17:
-    yaw: 3.105   # ≈ 177.9도
+    yaw: 3.105   # 실측 완료
+  0:             # Dior
+    yaw: -0.002
+  1:             # Tiffany
+    yaw: -0.002
+  2:             # Barbie
+    yaw: -1.572
+  3:             # IKEA
+    yaw: -1.572
+  4:             # Olive_Young
+    yaw: -1.572
+  5:             # ABC_Mart
+    yaw: -1.572
+  6:             # Starbucks
+    yaw: 3.142
+  7:             # Hi_Mart
+    yaw: 1.572
+  8:             # North_Face
+    yaw: 1.572
+  9:             # 8_Seconds
+    yaw: 1.572
+  10:            # Top10
+    yaw: 1.572
+  14:            # Pop_up
+    yaw: -2.192
+  15:            # Vendor
+    yaw: -1.572
