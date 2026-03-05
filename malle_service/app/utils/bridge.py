@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 
 BRIDGE_NODE_URL = os.getenv("BRIDGE_NODE_URL", "http://localhost:9100")
 
+# robot_id → bridge_node URL 레지스트리 (bridge_node가 state push 시 자동 등록)
+_bridge_registry: dict[int, str] = {}
+
+
+def register_bridge_url(robot_id: int, url: str) -> None:
+    _bridge_registry[robot_id] = url
+    logger.info(f"[bridge] robot {robot_id} registered at {url}")
+
+
+def _get_bridge_url(robot_id: int | None) -> str:
+    if robot_id and robot_id in _bridge_registry:
+        return _bridge_registry[robot_id]
+    return BRIDGE_NODE_URL
+
 
 async def send_to_bridge(endpoint: str, payload: dict) -> bool:
     """
@@ -35,7 +49,8 @@ async def send_to_bridge(endpoint: str, payload: dict) -> bool:
         True  — bridge_node 응답 200
         False — 연결 실패 또는 오류 (로그만 남기고 흐름 유지)
     """
-    url = f"{BRIDGE_NODE_URL}/bridge/{endpoint}"
+    robot_id = payload.get("robot_id")
+    url = f"{_get_bridge_url(robot_id)}/bridge/{endpoint}"
     try:
         async with httpx.AsyncClient(timeout=1.0) as client:
             resp = await client.post(url, json=payload)

@@ -32,6 +32,7 @@ ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "malle_15")
 
 MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
+BRIDGE_SELF_URL       = os.getenv("BRIDGE_SELF_URL", "")  # 예: http://192.168.4.10:9100
 STATE_UPDATE_INTERVAL = 0.5
 
 
@@ -390,17 +391,20 @@ if HAS_ROS2:
 
         def _push_state(self):
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
+            payload = {
+                "x_m":          self._state["x_m"],
+                "y_m":          self._state["y_m"],
+                "theta_rad":    self._state["theta_rad"],
+                "speed_mps":    self._state["speed_mps"],
+                "battery_pct":  self._state["battery_pct"],
+                "motion_state": motion,
+            }
+            if BRIDGE_SELF_URL:
+                payload["bridge_url"] = BRIDGE_SELF_URL
             try:
                 self._http_client.patch(
-                    f"http://localhost:8000/api/v1/robots/{ROBOT_ID}/state",
-                    json={
-                        "x_m":          self._state["x_m"],
-                        "y_m":          self._state["y_m"],
-                        "theta_rad":    self._state["theta_rad"],
-                        "speed_mps":    self._state["speed_mps"],
-                        "battery_pct":  self._state["battery_pct"],
-                        "motion_state": motion,
-                    },
+                    f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/state",
+                    json=payload,
                 )
             except httpx.ConnectError:
                 pass

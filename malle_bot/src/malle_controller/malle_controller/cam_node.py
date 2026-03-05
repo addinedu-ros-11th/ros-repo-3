@@ -33,7 +33,7 @@ try:
     from malle_controller.tag_tracker import TagTrackerNode
     from malle_controller.mission_parking11 import PinkyParkingNode
     _DEPS_AVAILABLE = True
-except (ImportError, ModuleNotFoundError) as e:
+except Exception as e:
     _DEPS_AVAILABLE = False
     print(f"[cam_node] 의존성 없음: {e}")
 

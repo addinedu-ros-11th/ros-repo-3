@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 // Timer is now managed globally in AppLayout
 import { SessionStartCard } from '@/components/home/SessionStartCard';
@@ -13,21 +13,13 @@ import { PinMatchingModal } from '@/components/home/PinMatchingModal';
 import { RobotApproachingCard } from '@/components/home/RobotApproachingCard';
 
 export default function Home() {
-  const { userName, sessionState, session, taskMission, startGuide } = useAppStore();
+  const { userName, sessionState, session, taskMission } = useAppStore();
   const [isStartModalOpen, setIsStartModalOpen] = useState(false);
 
   const isActive = sessionState === 'ACTIVE';
   const isApproaching = sessionState === 'APPROACHING' || sessionState === 'FINDING_ROBOT';
   const isPinMatching = sessionState === 'PIN_MATCHING';
   const isTaskMode = session.type === 'TASK' && !!taskMission;
-
-  // Auto-start guide for Task/Guide when session becomes ACTIVE
-  useEffect(() => {
-    if (isActive && isTaskMode && taskMission?.type === 'GUIDE') {
-      startGuide();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive]);
 
   return (
     <div className="space-y-5">
