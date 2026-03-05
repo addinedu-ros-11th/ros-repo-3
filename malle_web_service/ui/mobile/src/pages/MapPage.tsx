@@ -6,8 +6,9 @@ import { VoiceCommandPanel } from '@/components/voice/VoiceCommandPanel';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 // 맵 물리 크기 (미터)
-const MAP_WIDTH_M = 2.45;
+const MAP_WIDTH_M  = 2.45;
 const MAP_HEIGHT_M = 2.0;
+const MAP_OFFSET   = { left: 3.85, top: 4.65, right: 95.96, bottom: 95.12 };
 
 /**
  * 미터 좌표 → 맵 컨테이너 내 % 위치 변환
@@ -15,11 +16,13 @@ const MAP_HEIGHT_M = 2.0;
  * CSS: left % = x/width, top % = (height - y)/height  (y축 반전)
  */
 function toMapPercent(x_m: number, y_m: number) {
-  const left = (x_m / MAP_WIDTH_M) * 100;
-  const top  = ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * 100;
+  const innerW = MAP_OFFSET.right  - MAP_OFFSET.left;
+  const innerH = MAP_OFFSET.bottom - MAP_OFFSET.top;
+  const left = MAP_OFFSET.left + (x_m / MAP_WIDTH_M)                   * innerW;
+  const top  = MAP_OFFSET.top  + ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * innerH;
   return {
-    left: `${Math.min(Math.max(left, 2), 98)}%`,
-    top:  `${Math.min(Math.max(top,  2), 98)}%`,
+    left: `${Math.min(Math.max(left, 0), 100)}%`,
+    top:  `${Math.min(Math.max(top,  0), 100)}%`,
   };
 }
 
@@ -143,11 +146,28 @@ export default function MapPage() {
                 </div>
               )}
 
+              {/* ── 좌표 확인용 임시 마커 ── */}
+              {[
+                { label: '(0,0)',       x: 0,    y: 0 },
+                { label: '(2.45,2)',    x: 2.45, y: 2 },
+              ].map(({ label, x, y }) => (
+                <div
+                  key={label}
+                  className="absolute transform -translate-x-1/2 -translate-y-1/2 z-50"
+                  style={toMapPercent(x, y)}
+                >
+                  <div className="w-3 h-3 rounded-full bg-red-500 shadow-md" />
+                  <span className="absolute top-3 left-1/2 -translate-x-1/2 text-[9px] text-red-500 font-bold whitespace-nowrap">
+                    {label}
+                  </span>
+                </div>
+              ))}
+
               {/* ── 축척 표시 ── */}
-              <div className="absolute bottom-2 left-2 flex items-center gap-1">
+              {/* <div className="absolute bottom-2 left-2 flex items-center gap-1">
                 <div className="h-[2px] w-10 bg-foreground/60" />
                 <span className="text-[9px] text-foreground/60 font-medium">0.5m</span>
-              </div>
+              </div> */}
 
               {/* ── 좌표 원점 표시 (좌하단) ── */}
               <div className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />

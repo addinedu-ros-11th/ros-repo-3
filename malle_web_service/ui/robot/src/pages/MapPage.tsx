@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useRobotStore } from '@/stores/robotStore';
 import { toast } from 'sonner';
@@ -13,12 +14,17 @@ const MAP_HEIGHT_M = 2.0;
  * ROS2 좌표계: x = 오른쪽, y = 위쪽
  * CSS: left = x/width, top = (height-y)/height  (y축 반전)
  */
+const MAP_OFFSET = { left: 3.85, top: 4.65, right: 95.96, bottom: 95.12 };
+
 function toMapPercent(x_m: number, y_m: number) {
-  const left = (x_m / MAP_WIDTH_M)                   * 100;
-  const top  = ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * 100;
+  const innerW = MAP_OFFSET.right  - MAP_OFFSET.left;   // 94.23%
+  const innerH = MAP_OFFSET.bottom - MAP_OFFSET.top;    // 93.02%
+
+  const left = MAP_OFFSET.left + (x_m / MAP_WIDTH_M)                   * innerW;
+  const top  = MAP_OFFSET.top  + ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * innerH;
   return {
-    left: `${Math.min(Math.max(left, 2), 98)}%`,
-    top:  `${Math.min(Math.max(top,  2), 98)}%`,
+    left: `${Math.min(Math.max(left, 0), 100)}%`,
+    top:  `${Math.min(Math.max(top,  0), 100)}%`,
   };
 }
 
@@ -45,10 +51,16 @@ interface Poi {
   wait_y_m?: number | null;
 }
 
+// 호버 상태: POI id + 마커의 화면 좌표
+interface HoveredPoi {
+  id: number;
+  rect: DOMRect;
+}
+
 export function MapPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [highlightedPoi, setHighlightedPoi] = useState<number | null>(null);
-  const [hoveredPoi, setHoveredPoi]         = useState<number | null>(null);
+  const [hoveredPoi, setHoveredPoi]         = useState<HoveredPoi | null>(null);
   const [hoverTimeout, setHoverTimeout]     = useState<ReturnType<typeof setTimeout> | null>(null);
   const [pois, setPois]                     = useState<Poi[]>([]);
 
@@ -97,6 +109,9 @@ export function MapPage() {
   const robotY = (robot as any)?.y_m ?? (robot as any)?.location?.y ?? null;
   const robotName = (robot as any)?.name ?? 'Robot';
 
+  // 현재 호버된 POI 데이터
+  const hoveredPoiData = hoveredPoi ? pois.find(p => p.id === hoveredPoi.id) : null;
+
   return (
     <div className="h-full flex flex-col">
       {/* ── 헤더 ── */}
@@ -122,7 +137,7 @@ export function MapPage() {
           style={{
             aspectRatio: '2.45 / 2',
             width: '100%',
-            maxWidth: '520px',
+            maxWidth: 'min(800px, 90vw, 90vh)',
           }}
         >
           {/* PGM → PNG 맵 이미지 */}
@@ -156,18 +171,18 @@ export function MapPage() {
 
           {/* ── POI 마커 ── */}
           {pois.map((poi) => {
-            const pos          = toMapPercent(poi.x_m, poi.y_m);
+            const pos           = toMapPercent(poi.x_m, poi.y_m);
             const isHighlighted = highlightedPoi === poi.id;
-            const isHovered     = hoveredPoi     === poi.id;
 
             return (
               <div
                 key={poi.id}
                 className="absolute transform -translate-x-1/2 -translate-y-1/2 cursor-pointer z-10"
                 style={pos}
-                onMouseEnter={() => {
+                onMouseEnter={(e) => {
                   if (hoverTimeout) clearTimeout(hoverTimeout);
-                  setHoveredPoi(poi.id);
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setHoveredPoi({ id: poi.id, rect });
                 }}
                 onMouseLeave={() => {
                   const t = setTimeout(() => setHoveredPoi(null), 400);
@@ -195,53 +210,32 @@ export function MapPage() {
                 }`}>
                   {poi.name}
                 </span>
-
-                {/* ── 호버 팝업 ── */}
-                {isHovered && (
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-[60]">
-                    <div className="bg-card rounded-2xl p-4 shadow-xl border border-slate-200 dark:border-slate-700 w-52">
-                      <div className="flex items-center space-x-3 mb-3">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                          <span className="material-icons-round text-primary">{poiIcon(poi.type)}</span>
-                        </div>
-                        <div>
-                          <p className="font-semibold text-foreground text-sm">{poi.name}</p>
-                          <p className="text-xs text-muted-foreground">{poi.type}</p>
-                        </div>
-                      </div>
-                      <p className="text-xs text-muted-foreground font-mono mb-3">
-                        {poi.x_m.toFixed(3)}m, {poi.y_m.toFixed(3)}m
-                      </p>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => handleAddToGuide(poi)}
-                          className="flex-1 btn-secondary text-xs py-2 flex items-center justify-center gap-1"
-                        >
-                          <span className="material-icons-round text-sm">alt_route</span>
-                          Guide
-                        </button>
-                        {hasEmptySlot && (
-                          <button
-                            onClick={() => handleOrderPickup(poi)}
-                            className="flex-1 btn-primary text-xs py-2 flex items-center justify-center gap-1"
-                          >
-                            <span className="material-icons-round text-sm">shopping_bag</span>
-                            Pickup
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })}
 
+          {/* ── 좌표 확인용 임시 마커 ── */}
+          {[
+            { label: '(0,0)',       x: 0,    y: 0 },
+            { label: '(2.45,2)',    x: 2.45, y: 2 },
+          ].map(({ label, x, y }) => (
+            <div
+              key={label}
+              className="absolute transform -translate-x-1/2 -translate-y-1/2 z-50"
+              style={toMapPercent(x, y)}
+            >
+              <div className="w-3 h-3 rounded-full bg-red-500 shadow-md" />
+              <span className="absolute top-3 left-1/2 -translate-x-1/2 text-[9px] text-red-500 font-bold whitespace-nowrap">
+                {label}
+              </span>
+            </div>
+          ))}
+
           {/* ── 축척 표시 ── */}
-          <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-card/80 backdrop-blur-sm rounded-lg px-2 py-1">
+          {/* <div className="absolute bottom-3 left-3 flex items-center gap-1 bg-card/80 backdrop-blur-sm rounded-lg px-2 py-1">
             <div className="h-[2px] w-8 bg-foreground/60" />
             <span className="text-[9px] text-foreground/60 font-medium">0.5m</span>
-          </div>
+          </div> */}
         </div>
       </div>
 
@@ -264,6 +258,59 @@ export function MapPage() {
           <div className="ml-auto text-xs text-muted-foreground font-mono">2.5m × 2.0m</div>
         </div>
       </div>
+
+      {/* ── 호버 팝업 (Portal → document.body에 fixed 렌더링) ── */}
+      {hoveredPoi && hoveredPoiData && createPortal(
+        <div
+          className="fixed z-[9999] pointer-events-auto"
+          style={{
+            top:       hoveredPoi.rect.top - 8,
+            left:      hoveredPoi.rect.left + hoveredPoi.rect.width / 2,
+            transform: 'translate(-50%, -100%)',
+          }}
+          onMouseEnter={() => {
+            if (hoverTimeout) clearTimeout(hoverTimeout);
+          }}
+          onMouseLeave={() => {
+            const t = setTimeout(() => setHoveredPoi(null), 400);
+            setHoverTimeout(t);
+          }}
+        >
+          <div className="bg-card rounded-2xl p-4 shadow-xl border border-slate-200 dark:border-slate-700 w-64">
+            <div className="flex items-center space-x-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <span className="material-icons-round text-primary">{poiIcon(hoveredPoiData.type)}</span>
+              </div>
+              <div>
+                <p className="font-semibold text-foreground text-sm">{hoveredPoiData.name}</p>
+                <p className="text-xs text-muted-foreground">{hoveredPoiData.type}</p>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground font-mono mb-3">
+              {hoveredPoiData.x_m.toFixed(3)}m, {hoveredPoiData.y_m.toFixed(3)}m
+            </p>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => handleAddToGuide(hoveredPoiData)}
+                className="flex-1 btn-secondary text-xs py-2 flex items-center justify-center gap-1"
+              >
+                <span className="material-icons-round text-sm">alt_route</span>
+                Guide
+              </button>
+              {hasEmptySlot && (
+                <button
+                  onClick={() => handleOrderPickup(hoveredPoiData)}
+                  className="flex-1 btn-primary text-xs py-2 flex items-center justify-center gap-1"
+                >
+                  <span className="material-icons-round text-sm">shopping_bag</span>
+                  Pickup
+                </button>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
