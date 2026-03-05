@@ -28,6 +28,7 @@ install(DIRECTORY ${PROJECT_NAME}/
 set(MALLE_SCRIPTS
   mission_executor
   bridge_node
+  cam_node
   mission_guide
   mission_follow
   mission_errand

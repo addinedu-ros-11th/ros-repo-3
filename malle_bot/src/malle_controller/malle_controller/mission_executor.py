@@ -265,60 +265,15 @@ class MissionExecutor(Node, NavCore):
 def main():
     rclpy.init()
     executor = MultiThreadedExecutor()
-    nodes = [MissionExecutor()]
-
-    camera = None
-
-    if _CAMERA_AVAILABLE:
-        try:
-            cam = Camera()
-            cam.start(width=640, height=480)
-            camera = cam
-
-            _latest_gray = None
-            _frame_lock = threading.Lock()
-
-            def _capture():
-                nonlocal _latest_gray
-                while True:
-                    frame = cam.get_frame()
-                    if frame is not None:
-                        with _frame_lock:
-                            _latest_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-                    time.sleep(0.01)
-
-            def get_gray_frame():
-                with _frame_lock:
-                    return _latest_gray
-
-            threading.Thread(target=_capture, daemon=True).start()
-
-            nodes += [
-                MissionFollowNode(get_gray_frame),
-                TagTrackerNode(get_gray_frame),
-                PinkyParkingNode(get_gray_frame),
-            ]
-        except Exception as e:
-            rclpy.logging.get_logger('mission_executor').warn(
-                f'카메라 초기화 실패 - 카메라 노드 비활성화: {e}')
-            camera = None
-    else:
-        rclpy.logging.get_logger('mission_executor').warn(
-            'pinkylib 없음 - 카메라 노드 비활성화')
-
-    for node in nodes:
-        executor.add_node(node)
+    executor.add_node(MissionExecutor())
 
     try:
         executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        for node in nodes:
-            node.destroy_node()
+        executor.shutdown()
         rclpy.shutdown()
-        if camera is not None:
-            camera.close()
 
 
 if __name__ == '__main__':

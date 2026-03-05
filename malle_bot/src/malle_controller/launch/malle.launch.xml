@@ -1,11 +1,11 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
-  <arg name="robot_id"        default="malle_01"/>
-  <arg name="robot_ns"        default="robot1"/>
+  <arg name="robot_id"        default="1"/>
+  <arg name="robot_ns"        default="malle_15"/>
   <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
   <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
 
-  <!-- ===== mission_executor  –  미션 상태 디스패처 + 카메라 + tag tracker 통합 실행 ===== -->
+  <!-- ===== mission_executor  –  미션 상태 디스패처 ===== -->
   <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
         output="screen">
     <param name="robot_id" value="$(var robot_id)"/>
@@ -38,4 +38,10 @@
   <!-- ===== battery_monitor ===== -->
   <node pkg="malle_controller" exec="battery_monitor" name="battery_monitor"
         output="screen"/>
+
+  <!-- ===== cam_node ===== -->
+  <node pkg="malle_controller" exec="cam_node" name="cam_node"
+        output="screen">
+    <env name="CAMERA_FPS" value="15"/>
+  </node>
 </launch>

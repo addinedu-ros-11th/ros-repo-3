@@ -14,12 +14,13 @@
     실행:
       ros2 launch malle_controller bridge.launch.xml
       ros2 launch malle_controller bridge.launch.xml malle_service_url:=http://192.168.0.10:8000/api/v1
-      ros2 launch malle_controller bridge.launch.xml robot_ns_map:=robot1:1,robot2:2
+      ros2 launch malle_controller bridge.launch.xml robot_namespace:=malle_15 robot_id:=1
   -->
 
   <arg name="malle_service_url" default="http://localhost:8000"/>
   <arg name="bridge_http_port"  default="9100"/>
-  <arg name="robot_ns_map"      default="robot1:1"/>
+  <arg name="robot_namespace"   default="malle_15"/>
+  <arg name="robot_id"          default="1"/>
 
   <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
         output="screen">
@@ -29,6 +30,7 @@
     -->
     <env name="MALLE_SERVICE_URL" value="$(var malle_service_url)"/>
     <env name="BRIDGE_HTTP_PORT"  value="$(var bridge_http_port)"/>
-    <env name="ROBOT_NS_MAP"      value="$(var robot_ns_map)"/>
+    <env name="ROBOT_NAMESPACE"   value="$(var robot_namespace)"/>
+    <env name="ROBOT_ID"          value="$(var robot_id)"/>
   </node>
 </launch>
