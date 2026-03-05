@@ -66,18 +66,12 @@ except ImportError:
     HAS_ROS2 = False
     print("[bridge_node] WARNING: ROS2 not available. HTTP-only mode.")
 
-# ─────────────────────────────────────────────────────────────
-# Camera import
-# ─────────────────────────────────────────────────────────────
 try:
     import cv2
     import numpy as np
-    from malle_bot.src.malle_controller.malle_controller.camera import Camera as PinkyCamera
-    HAS_CAMERA = True
-    print("[bridge_node] Camera: camera.py loaded")
-except ImportError as e:
-    HAS_CAMERA = False
-    print(f"[bridge_node] Camera disabled: {e}")
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI import
@@ -100,9 +94,6 @@ except ImportError:
 _ros_node = None
 _mission_executor = None
 
-# ─────────────────────────────────────────────────────────────
-# Camera frame buffer
-# ─────────────────────────────────────────────────────────────
 
 class CameraFrameBuffer:
     def __init__(self):
@@ -118,41 +109,6 @@ class CameraFrameBuffer:
             return self._frame
 
 camera_buffer = CameraFrameBuffer()
-
-
-def _camera_loop():
-    if not HAS_CAMERA:
-        return
-
-    cam = None
-    while True:
-        try:
-            cam = PinkyCamera()
-            cam.start(width=CAMERA_WIDTH, height=CAMERA_HEIGHT)
-            print(f"[camera] Picamera2 started ({CAMERA_WIDTH}x{CAMERA_HEIGHT})")
-
-            while True:
-                frame = cam.get_frame()
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                _, buf = cv2.imencode(
-                    ".jpg", frame_bgr,
-                    [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-                )
-                camera_buffer.put(buf.tobytes())
-                time.sleep(1.0 / STREAM_MAX_FPS)
-
-        except RuntimeError as e:
-            print(f"[camera] Error: {e}. Retrying in 3s...")
-            if cam:
-                try: cam.close()
-                except Exception: pass
-            time.sleep(3.0)
-        except Exception as e:
-            print(f"[camera] Unexpected error: {e}. Retrying in 5s...")
-            if cam:
-                try: cam.close()
-                except Exception: pass
-            time.sleep(5.0)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -209,7 +165,7 @@ if HAS_FASTAPI:
             "status": "ok",
             "robot_id": ROBOT_ID,
             "namespace": ROBOT_NAMESPACE,
-            "camera": HAS_CAMERA,
+            "camera": camera_buffer.get() is not None,
             "mission_executor": _mission_executor is not None,
             "topics": {
                 "odom":           TOPIC_ODOM,
@@ -322,7 +278,7 @@ if HAS_FASTAPI:
     # ── MJPEG 스트리밍 ──────────────────────────────────────────────────────
 
     def _make_placeholder(robot_id: int) -> bytes:
-        if not HAS_CAMERA:
+        if not HAS_CV2:
             return b""
         img = np.zeros((CAMERA_HEIGHT, CAMERA_WIDTH, 3), dtype=np.uint8)
         cv2.putText(
@@ -374,6 +330,8 @@ if HAS_FASTAPI:
 # ─────────────────────────────────────────────────────────────
 
 if HAS_ROS2:
+    from sensor_msgs.msg import Image as RosImage
+
     class BridgeNode(Node):
         def __init__(self):
             super().__init__(f"malle_bridge_{ROBOT_NAMESPACE}")
@@ -390,6 +348,7 @@ if HAS_ROS2:
 
             self.create_subscription(Odometry, TOPIC_ODOM, self._odom_cb, 10)
             self.create_subscription(Float32, TOPIC_BATTERY, self._battery_cb, 10)
+            self.create_subscription(RosImage, '/camera/image_raw', self._image_cb, 1)
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
 
@@ -420,6 +379,14 @@ if HAS_ROS2:
 
         def _battery_cb(self, msg: Float32):
             self._state["battery_pct"] = int(msg.data)
+
+        def _image_cb(self, msg: RosImage):
+            if not HAS_CV2:
+                return
+            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            camera_buffer.put(buf.tobytes())
 
         def _push_state(self):
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
@@ -498,9 +465,6 @@ def run_http_server():
 
 def main():
     global _ros_node, _mission_executor
-
-    # 카메라 스레드
-    threading.Thread(target=_camera_loop, daemon=True).start()
 
     # HTTP 서버 스레드
     threading.Thread(target=run_http_server, daemon=True).start()
