@@ -86,9 +86,10 @@ class ParkingNode(Node):
 
 
 def main(target_id: int):
+    # rclpy가 이미 초기화 안 되어있을 때만 init
     if not rclpy.ok():
         rclpy.init()
-        
+
     node = ParkingNode()
     cam = Camera()
     detector = Detector(
@@ -151,7 +152,7 @@ def main(target_id: int):
             pass
         try:
             node.destroy_node()
-            rclpy.shutdown()
+            # rclpy.shutdown() 제거 ← main_park.py가 rclpy 생명주기 관리
         except Exception:
             pass
         print("[INFO] Closed.")

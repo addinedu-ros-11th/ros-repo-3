@@ -36,6 +36,7 @@ from nav2_msgs.action import NavigateToPose
 
 # AprilTag 주차 함수 (AprilTag 사용 매장에서만 호출)
 from store_park.parking import main as parking_main
+from ament_index_python.packages import get_package_share_directory
 
 
 # ================================================================
@@ -76,7 +77,6 @@ class GoToXY(Node):
         self.get_logger().info("Nav2 액션 서버를 기다리는 중...")
         if not self._client.wait_for_server(timeout_sec=10.0):
             self.get_logger().error("Nav2 액션 서버를 사용할 수 없습니다.")
-            rclpy.shutdown()
             return
 
         self.get_logger().info(f"목표 전송: x={x}, y={y}, yaw={yaw_rad}rad")
@@ -87,7 +87,6 @@ class GoToXY(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error("목표가 거절되었습니다.")
-            rclpy.shutdown()
             return
         self.get_logger().info("목표 수락됨. 결과를 기다리는 중...")
         result_future = goal_handle.get_result_async()
@@ -101,7 +100,6 @@ class GoToXY(Node):
             self._arrived = True
         else:
             print(f"아직 도착하지 못했습니다. (status={status})")
-        rclpy.shutdown()
 
 
 # ================================================================
@@ -113,12 +111,10 @@ class ParkNode(Node):
 
         # ===== stores.json 로드 =====
         config_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "configs",
-            "stores.json"
+            get_package_share_directory('store_park'),
+            'configs',
+            'stores.json'
         )
-
         if not os.path.exists(config_path):
             self.get_logger().error(f"stores.json 없음: {config_path}")
             raise FileNotFoundError(f"stores.json 없음: {config_path}")
@@ -129,8 +125,11 @@ class ParkNode(Node):
         self.get_logger().info(f"매장 {len(self.store_configs)}개 로드 완료")
 
         # ===== Queue 초기화 =====
-        self.queue     = deque()
+        self.queue      = deque()
         self.is_running = False
+
+        # 0.1초마다 Queue 체크
+        self.create_timer(0.1, self.process_queue)
 
         # ===== Subscriber =====
         # 단일 매장: "/go_store"  → "ABC_Mart"
@@ -171,7 +170,7 @@ class ParkNode(Node):
         self.pub_status.publish(
             String(data=f"Queue 추가: {store_name} | 대기: {len(self.queue)}개")
         )
-        self.process_queue()
+        # Timer가 알아서 process_queue() 호출
 
     # ================================================================
     # 다중 매장 처리
@@ -192,19 +191,13 @@ class ParkNode(Node):
             self.pub_status.publish(
                 String(data=f"Queue 추가: {valid} | 총 대기: {len(self.queue)}개")
             )
-            self.process_queue()
+        # Timer가 알아서 process_queue() 호출
 
     # ================================================================
     # Queue 순서대로 실행
     # ================================================================
     def process_queue(self):
-        if self.is_running:
-            self.get_logger().info(f"이동 중... 대기 Queue: {len(self.queue)}개")
-            return
-
-        if len(self.queue) == 0:
-            self.get_logger().info("모든 매장 이동 완료")
-            self.pub_status.publish(String(data="모든 매장 이동 완료"))
+        if self.is_running or len(self.queue) == 0:
             return
 
         self.is_running = True
@@ -214,8 +207,8 @@ class ParkNode(Node):
         GOAL_X        = config["goal_x"]
         GOAL_Y        = config["goal_y"]
         GOAL_YAW      = config["goal_yaw"]
-        has_april_tag = "target_id" in config          # ← AprilTag 사용 여부 판단
-        TARGET_ID     = config.get("target_id", None)  # ← 없으면 None
+        has_april_tag = "target_id" in config
+        TARGET_ID     = config.get("target_id", None)
 
         self.get_logger().info(
             f"[{store_name}] 이동 시작 → "
@@ -227,18 +220,18 @@ class ParkNode(Node):
             String(data=f"이동 중: {store_name} | 남은: {len(self.queue)}개")
         )
 
-        # ================================================================
-        # Nav2로 목표 좌표 이동
-        # ================================================================
+        # ===== Nav2 이동 =====
         nav_node = GoToXY("/navigate_to_pose")
         nav_node.send_goal(x=GOAL_X, y=GOAL_Y, yaw_rad=GOAL_YAW)
-        rclpy.spin(nav_node)
 
-        # ================================================================
-        # 도착 후 처리
-        #   AprilTag 있음 → parking_main(target_id) 호출 (정밀 주차)
-        #   AprilTag 없음 → 좌표 도착으로 바로 완료
-        # ================================================================
+        executor = rclpy.executors.SingleThreadedExecutor()
+        executor.add_node(nav_node)
+        while not nav_node._arrived and rclpy.ok():
+            executor.spin_once(timeout_sec=0.1)
+        executor.shutdown()
+        nav_node.destroy_node()
+
+        # ===== 도착 후 처리 =====
         if nav_node._arrived:
             if has_april_tag:
                 self.get_logger().info(
@@ -250,15 +243,10 @@ class ParkNode(Node):
                     f"[{store_name}] 좌표 도착 완료 (AprilTag 없음)"
                 )
             self.on_goal_reached(store_name)
-
         else:
-            # 이동 실패해도 다음 매장 진행
             self.get_logger().error(f"[{store_name}] 이동 실패 → 다음 매장으로")
             self.pub_status.publish(String(data=f"실패: {store_name} | 다음 매장으로"))
             self.is_running = False
-            self.process_queue()
-
-        nav_node.destroy_node()
 
     # ================================================================
     # 목표 도달 완료 → 다음 Queue 자동 실행
@@ -269,7 +257,7 @@ class ParkNode(Node):
             String(data=f"완료: {store_name} | 남은: {len(self.queue)}개")
         )
         self.is_running = False
-        self.process_queue()  # 다음 매장 자동 실행
+        # Timer가 알아서 다음 매장 process_queue() 호출
 
     # ================================================================
     # 전체 취소
