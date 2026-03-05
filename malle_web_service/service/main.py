@@ -1,71 +1,87 @@
-#!/usr/bin/env python3
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from datetime import datetime
-from typing import List, Dict
+"""
+malle_web_service - Static file serving for 3 React SPAs.
+Serves /mobile/*, /robot/*, /admin/* with SPA fallback.
+Port: 8001
+"""
 
-app = FastAPI()
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Mall-E Web Service", version="0.1.0")
 
-connected_clients: List[WebSocket] = []
+# Paths to built UI directories
+UI_DIR = Path(__file__).parent.parent / "ui"
+MOBILE_DIR = UI_DIR / "mobile" / "dist"
+ROBOT_DIR = UI_DIR / "robot" / "dist"
+ADMIN_DIR = UI_DIR / "admin" / "dist"
 
-class WebData(BaseModel):
-    message_id: str
-    ai_result: dict
-    timing: Dict[str, float]
-
-@app.post("/web/update")
-async def update_web(data: WebData):
-    message = {
-        'type': 'robot_update',
-        'data': {
-            'message_id': data.message_id,
-            'ai_result': data.ai_result,
-            'timing': data.timing,
-            'received_at': datetime.now().isoformat()
-        }
-    }
-
-    disconnected = []
-    for client in connected_clients:
-        try:
-            await client.send_json(message)
-        except Exception:
-            disconnected.append(client)
-
-    for client in disconnected:
-        connected_clients.remove(client)
-
-    return {"status": "broadcasted", "clients": len(connected_clients)}
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    connected_clients.append(websocket)
-
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        if websocket in connected_clients:
-            connected_clients.remove(websocket)
-
+# Root redirect
 @app.get("/")
-def read_root():
-    return {
-        "status": "malle_web_service running",
-        "port": 8001,
-        "connected_clients": len(connected_clients)
-    }
+async def root():
+    return HTMLResponse(
+        """<html><body>
+        <h2>Mall-E Web Service</h2>
+        <ul>
+            <li><a href="/mobile/">Mobile App</a></li>
+            <li><a href="/robot/">Robot UI</a></li>
+            <li><a href="/admin/">Admin Dashboard</a></li>
+        </ul>
+        </body></html>"""
+    )
 
-if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+# Health check
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "malle_web_service"}
+
+
+def _mount_spa(app: FastAPI, path_prefix: str, dist_dir: Path):
+    """Mount a React SPA with static assets and fallback to index.html."""
+
+    if not dist_dir.exists():
+        @app.get(f"/{path_prefix}/{{rest_of_path:path}}")
+        async def not_built(rest_of_path: str, _prefix=path_prefix):
+            return HTMLResponse(
+                f"<h3>{_prefix} UI not built yet.</h3>"
+                f"<p>Run <code>cd malle_web_service/ui/{_prefix} && npm run build</code></p>",
+                status_code=503,
+            )
+        return
+
+    # Mount static assets (js, css, images, etc.)
+    assets_dir = dist_dir / "assets"
+    if assets_dir.exists():
+        app.mount(
+            f"/{path_prefix}/assets",
+            StaticFiles(directory=str(assets_dir)),
+            name=f"{path_prefix}_assets",
+        )
+
+    # SPA fallback: any route under /prefix/* returns index.html
+    @app.get(f"/{path_prefix}/{{rest_of_path:path}}")
+    async def spa_fallback(request: Request, rest_of_path: str, _dir=dist_dir):
+        # Try to serve the exact file first
+        file_path = _dir / rest_of_path
+        if rest_of_path and file_path.is_file():
+            return FileResponse(file_path)
+        # Otherwise, return index.html (SPA routing)
+        index = _dir / "index.html"
+        if index.exists():
+            return FileResponse(index)
+        return HTMLResponse("<h3>index.html not found</h3>", status_code=404)
+
+    # Handle /prefix (without trailing slash)
+    @app.get(f"/{path_prefix}")
+    async def spa_root(_dir=dist_dir):
+        index = _dir / "index.html"
+        if index.exists():
+            return FileResponse(index)
+        return HTMLResponse("<h3>index.html not found</h3>", status_code=404)
+
+
+# Mount all three SPAs
+_mount_spa(app, "mobile", MOBILE_DIR)
+_mount_spa(app, "robot", ROBOT_DIR)
+_mount_spa(app, "admin", ADMIN_DIR)

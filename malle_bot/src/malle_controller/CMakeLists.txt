@@ -18,36 +18,47 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-# Python 모듈 직접 설치
+# Python 모듈 설치
 install(DIRECTORY ${PROJECT_NAME}/
   DESTINATION lib/python${PYTHON_VERSION}/site-packages/${PROJECT_NAME}
   FILES_MATCHING PATTERN "*.py"
 )
 
-# Wrapper 스크립트 생성
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/test_publisher
-"#!/usr/bin/env python3
-import sys
-sys.path.insert(0, '${CMAKE_INSTALL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages')
-from malle_controller.test_publisher import main
-if __name__ == '__main__':
-    main()
-")
-
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/test_subscriber
-"#!/usr/bin/env python3
-import sys
-sys.path.insert(0, '${CMAKE_INSTALL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages')
-from malle_controller.test_subscriber import main
-if __name__ == '__main__':
-    main()
-")
-
-# Wrapper 스크립트 설치
-install(PROGRAMS
-  ${CMAKE_CURRENT_BINARY_DIR}/test_publisher
-  ${CMAKE_CURRENT_BINARY_DIR}/test_subscriber
-  DESTINATION lib/${PROJECT_NAME}
+# -- 실행 스크립트 목록 -----------
+set(MALLE_SCRIPTS
+  mission_executor
+  bridge_node
+  mission_guide
+  mission_follow
+  mission_errand
+  tag_tracker
+  lockbox_controller
+  battery_monitor
+  topic_relay
+  mission_parking11
 )
+
+# 스크립트 자동 생성 및 설치
+foreach(script ${MALLE_SCRIPTS})
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/${script}
+"#!/usr/bin/env python3
+import sys
+sys.path.insert(0, '${CMAKE_INSTALL_PREFIX}/lib/python${PYTHON_VERSION}/site-packages')
+from malle_controller.${script} import main
+if __name__ == '__main__':
+    main()
+")
+endforeach()
+
+set(script_files)
+foreach(script ${MALLE_SCRIPTS})
+  list(APPEND script_files ${CMAKE_CURRENT_BINARY_DIR}/${script})
+endforeach()
+
+install(PROGRAMS ${script_files} DESTINATION lib/${PROJECT_NAME})
+
+# launch 및 config 파일 설치
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
 ament_package()

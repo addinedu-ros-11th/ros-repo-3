@@ -1,0 +1,41 @@
+<launch>
+  <!-- ===== 공통 인수 ===== -->
+  <arg name="robot_id"        default="malle_01"/>
+  <arg name="robot_ns"        default="robot1"/>
+  <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
+  <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
+
+  <!-- ===== mission_executor  –  미션 상태 디스패처 + 카메라 + tag tracker 통합 실행 ===== -->
+  <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
+        output="screen">
+    <param name="robot_id" value="$(var robot_id)"/>
+  </node>
+
+  <!-- ===== mission_guide  –  가이드 모드 ===== -->
+  <node pkg="malle_controller" exec="mission_guide" name="mission_guide"
+        output="screen">
+    <param name="api_base_url" value="$(var api_base_url)"/>
+  </node>
+
+  <!-- ===== mission_errand  –  심부름 모드 ===== -->
+  <node pkg="malle_controller" exec="mission_errand" name="mission_errand"
+        output="screen">
+    <param name="api_base_url" value="$(var api_base_url)"/>
+  </node>
+
+  <!-- ===== lockbox_controller ===== -->
+  <node pkg="malle_controller" exec="lockbox_controller" name="lockbox_controller"
+        output="screen">
+    <param name="interface" value="$(var lockbox_iface)"/>
+  </node>
+
+  <!-- ===== topic_relay  –  /odom, /battery/present → /{robot_ns}/ ===== -->
+  <node pkg="malle_controller" exec="topic_relay" name="topic_relay"
+        output="screen">
+    <param name="robot_ns" value="$(var robot_ns)"/>
+  </node>
+
+  <!-- ===== battery_monitor ===== -->
+  <node pkg="malle_controller" exec="battery_monitor" name="battery_monitor"
+        output="screen"/>
+</launch>

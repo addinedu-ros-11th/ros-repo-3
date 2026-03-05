@@ -1,0 +1,4 @@
+flask>=3.0.0
+# LLM SDK will be added when model is decided
+# openai>=1.0.0 OR
+# anthropic>=0.18.0
