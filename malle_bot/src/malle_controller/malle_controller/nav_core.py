@@ -19,42 +19,8 @@ MAX_ANGULAR_VEL     = 1.0           # PID 최대 각속도 (rad/s)
 ROTATE_FIRST_ANGLE  = math.radians(30)  # 이 각도 이상이면 제자리 회전 우선 (rad)
 ZONE_CHECK_PERIOD   = 0.1           # zone 체크 타이머 주기 (s)
 PID_PERIOD          = 0.02          # PID 루프 타이머 주기 (s)
-NAV_RETRY_MAX       = 1             # Nav2 실패 시 최대 재시도 횟수
+ARRIVAL_THRESHOLD   = 0.05          # 도착 판정 거리 (m)
 
-
-# ─────────────────────────────────────────────────────────────
-# Waypoint Graph Loader
-# ─────────────────────────────────────────────────────────────
-
-def _load_waypoint_graph(yaml_path: str | None = None) -> tuple[dict, dict]:
-    """
-    waypoint_graph.yaml 로드.
-
-    Returns:
-        points: { wp_id: {"x": float, "y": float} }
-        edges:  { wp_id: [wp_id, ...] }  (단방향 — BFS에서 양방향 취급)
-    """
-    if yaml_path is None:
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), '..', 'config', 'waypoint_graph.yaml'
-        )
-
-    try:
-        import yaml
-        with open(yaml_path, 'r') as f:
-            data = yaml.safe_load(f)
-        points = {k: {"x": float(v["x"]), "y": float(v["y"])}
-                  for k, v in data.get("waypoints", {}).items()}
-        edges = {k: list(v) for k, v in data.get("edges", {}).items()}
-        return points, edges
-    except Exception as e:
-        print(f"[NavCore] waypoint_graph.yaml 로드 실패: {e} — 빈 그래프 사용")
-        return {}, {}
-
-
-# ─────────────────────────────────────────────────────────────
-# NavCore Mixin
-# ─────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────────────────────────
 # Waypoint Graph Loader
@@ -92,17 +58,33 @@ def _load_waypoint_graph(yaml_path: str | None = None) -> tuple[dict, dict]:
 # ─────────────────────────────────────────────────────────────
 
 class NavCore:
-    """Nav2 + cmd_vel + 웨이포인트 경로 계획 공용 엔진 (Node 믹스인용)."""
+    """Nav2 + PID + 웨이포인트 경로 계획 공용 엔진 (Node 믹스인용)."""
 
     def nav_core_init(self, node: Node, waypoint_yaml: str | None = None):
-        """미션 노드의 __init__에서 호출"""
+        """미션 노드의 __init__에서 호출."""
         self._node = node
 
-        self._nav_client = ActionClient(node, NavigateToPose, '/navigate_to_pose')
-        self._cmd_pub = node.create_publisher(Twist, _ns('cmd_vel'), 10)
+        # cmd_vel 퍼블리셔 (relative topic — 노드 네임스페이스 자동 적용)
+        self._cmd_pub = node.create_publisher(Twist, 'cmd_vel', 10)
 
+        # Nav2 액션 클라이언트
+        self._nav_client = ActionClient(node, NavigateToPose, '/navigate_to_pose')
         self._current_goal_handle = None
-        self._nav_abort = False  # 웨이포인트 주행 중단 플래그
+        self._nav_abort = False
+
+        # 목표 상태
+        self._nav_gen         = 0
+        self._nav_retry_count = 0
+        self._goal_x          = 0.0
+        self._goal_y          = 0.0
+        self._goal_yaw        = 0.0
+        self._nav_done_cb     = None
+        self._nav_mode        = 'IDLE'   # 'IDLE' | 'NAV2' | 'PID'
+        self._pid_zone_radius = 0.3      # 기본 PID 전환 반경 (m)
+
+        # 타이머
+        self._zone_timer = None
+        self._pid_timer  = None
 
         # 웨이포인트 그래프 로드
         self._wp_points, self._wp_edges = _load_waypoint_graph(waypoint_yaml)
@@ -121,11 +103,11 @@ class NavCore:
             self._has_tf = False
             node.get_logger().warn("[NavCore] TF2 사용 불가 — 현재 위치 추정 비활성화")
 
-    # ── 기존 단순 이동 ────────────────────────────────────────
+    # ── Nav2 단순 이동 ────────────────────────────────────────
 
     def navigate_to_pose(self, x: float, y: float, yaw: float = 0.0,
-                         done_callback=None):
-        """Nav2 NavigateToPose 액션 직접 전송 (경유지 없음)."""
+                         done_callback=None, pid_zone_radius: float = 0.3):
+        """Nav2 NavigateToPose 액션 전송. 목표 반경 내 진입 시 PID로 전환."""
         if not self._nav_client.wait_for_server(timeout_sec=3.0):
             self._node.get_logger().error('[NavCore] navigate_to_pose: 액션 서버 없음')
             if done_callback:
@@ -134,7 +116,6 @@ class NavCore:
 
         self._nav_gen        += 1
         self._nav_retry_count = 0
-        my_gen               = self._nav_gen
         self._goal_x         = x
         self._goal_y         = y
         self._goal_yaw       = yaw
@@ -145,16 +126,18 @@ class NavCore:
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
 
+        my_gen = self._nav_gen
         future = self._nav_client.send_goal_async(goal)
         future.add_done_callback(lambda f, g=my_gen: self._on_goal_accepted(f, g))
 
         self._restart_timer('zone')
 
-    # ── 웨이포인트 경유 이동 (핵심 추가) ─────────────────────
+    # ── 웨이포인트 경유 이동 ──────────────────────────────────
 
     def navigate_via_waypoints(self, target_x: float, target_y: float,
                                 target_yaw: float = 0.0,
-                                done_callback=None):
+                                done_callback=None,
+                                pid_zone_radius: float = 0.0):
         """
         웨이포인트 그래프 경유 후 최종 좌표로 이동.
 
@@ -163,7 +146,7 @@ class NavCore:
           2. 목적지 (target_x, target_y) → 가장 가까운 끝 웨이포인트
           3. BFS로 시작 wp → 끝 wp 경로 계산
           4. 경유 wp 순차 이동
-          5. 마지막에 실제 (target_x, target_y, target_yaw) 로 최종 이동
+          5. 최종 목적지: pid_zone_radius > 0 이면 PID 전환, 아니면 Nav2 직접 이동
           6. done_callback 호출
 
         웨이포인트 그래프가 비어있으면 navigate_to_pose() 로 폴백.
@@ -172,57 +155,107 @@ class NavCore:
             self._node.get_logger().warn(
                 "[NavCore] 웨이포인트 그래프 없음 — 직접 이동으로 폴백"
             )
-            self.navigate_to_pose(target_x, target_y, target_yaw, done_callback)
+            self.navigate_to_pose(target_x, target_y, target_yaw, done_callback,
+                                  pid_zone_radius=pid_zone_radius)
             return
 
         threading.Thread(
             target=self._waypoint_nav_thread,
-            args=(target_x, target_y, target_yaw, done_callback),
-            daemon=True,
-        ).start()
-
-    # ── 웨이포인트 경유 이동 (핵심 추가) ─────────────────────
-
-    def navigate_via_waypoints(self, target_x: float, target_y: float,
-                                target_yaw: float = 0.0,
-                                done_callback=None):
-        """
-        웨이포인트 그래프 경유 후 최종 좌표로 이동.
-
-        흐름:
-          1. 현재 위치 → 가장 가까운 시작 웨이포인트
-          2. 목적지 (target_x, target_y) → 가장 가까운 끝 웨이포인트
-          3. BFS로 시작 wp → 끝 wp 경로 계산
-          4. 경유 wp 순차 이동
-          5. 마지막에 실제 (target_x, target_y, target_yaw) 로 최종 이동
-          6. done_callback 호출
-
-        웨이포인트 그래프가 비어있으면 navigate_to_pose() 로 폴백.
-        """
-        if not self._wp_points:
-            self._node.get_logger().warn(
-                "[NavCore] 웨이포인트 그래프 없음 — 직접 이동으로 폴백"
-            )
-            self.navigate_to_pose(target_x, target_y, target_yaw, done_callback)
-            return
-
-        threading.Thread(
-            target=self._waypoint_nav_thread,
-            args=(target_x, target_y, target_yaw, done_callback),
+            args=(target_x, target_y, target_yaw, done_callback, pid_zone_radius),
             daemon=True,
         ).start()
 
     def cancel_navigation(self):
         """진행 중인 Nav2 목표 및 웨이포인트 주행 취소."""
         self._nav_abort = True
+        self._nav_mode  = 'IDLE'
+        self._cancel_timer('zone')
+        self._cancel_timer('pid')
         if self._current_goal_handle is not None:
             self._current_goal_handle.cancel_goal_async()
             self._current_goal_handle = None
 
+    # ── Zone 체크 (Nav2 → PID 전환) ──────────────────────────
+
+    def _zone_check(self):
+        """
+        목표 지점 반경 내 진입 시 Nav2 취소 → PID 모드 전환.
+        ZONE_CHECK_PERIOD(0.1s) 마다 호출.
+        """
+        if self._nav_mode != 'NAV2':
+            return
+
+        curr_x, curr_y = self._get_current_position()
+        if curr_x is None:
+            return
+
+        dist = math.hypot(self._goal_x - curr_x, self._goal_y - curr_y)
+        if dist > self._pid_zone_radius:
+            return
+
+        # PID 모드 전환
+        self._nav_mode = 'PID'
+        self._cancel_timer('zone')
+
+        if self._current_goal_handle is not None:
+            self._current_goal_handle.cancel_goal_async()
+            self._current_goal_handle = None
+
+        self._node.get_logger().info(
+            f'[NavCore] PID 모드 전환 (거리={dist:.3f}m, 반경={self._pid_zone_radius}m)'
+        )
+        self._restart_timer('pid')
+
+    # ── PID 제어 루프 ─────────────────────────────────────────
+
+    def _pid_loop(self):
+        """
+        목표 좌표를 향해 직접 cmd_vel 발행.
+        PID_PERIOD(0.02s) 마다 호출.
+        """
+        curr_x, curr_y = self._get_current_position()
+        if curr_x is None:
+            return
+
+        dx   = self._goal_x - curr_x
+        dy   = self._goal_y - curr_y
+        dist = math.hypot(dx, dy)
+
+        # 도착 판정
+        if dist < ARRIVAL_THRESHOLD:
+            self.stop()
+            self._cancel_timer('pid')
+            self._nav_mode = 'IDLE'
+            self._node.get_logger().info('[NavCore] PID 도착')
+            if self._nav_done_cb:
+                self._nav_done_cb(True)
+                self._nav_done_cb = None
+            return
+
+        target_yaw = math.atan2(dy, dx)
+        curr_yaw   = self._get_current_yaw()
+        if curr_yaw is None:
+            return
+
+        yaw_err = math.atan2(
+            math.sin(target_yaw - curr_yaw),
+            math.cos(target_yaw - curr_yaw),
+        )
+
+        # 각도 오차 큰 경우 제자리 회전 우선
+        if abs(yaw_err) > ROTATE_FIRST_ANGLE:
+            linear_x = 0.0
+        else:
+            linear_x = min(MAX_LINEAR_VEL, 0.5 * dist)
+
+        angular_z = max(-MAX_ANGULAR_VEL, min(MAX_ANGULAR_VEL, 2.0 * yaw_err))
+        self.cmd_vel(linear_x, angular_z)
+
     # ── 웨이포인트 주행 스레드 ────────────────────────────────
 
     def _waypoint_nav_thread(self, target_x: float, target_y: float,
-                              target_yaw: float, done_callback):
+                              target_yaw: float, done_callback,
+                              pid_zone_radius: float = 0.0):
         self._nav_abort = False
 
         # 1. 현재 위치 파악
@@ -260,10 +293,8 @@ class NavCore:
             f"[NavCore] 경로: {' → '.join(path)} → 최종목적지"
         )
 
-        # 4. 경유 웨이포인트 순차 이동 (마지막 wp 제외 — 최종 목적지로 대체)
-        waypoints_to_visit = path[:-1]  # 마지막 wp는 최종 목적지로 대체
-
-        for wp_id in waypoints_to_visit:
+        # 4. 경유 웨이포인트 순차 이동 (마지막 wp는 최종 목적지로 대체)
+        for wp_id in path[:-1]:
             if self._nav_abort:
                 self._node.get_logger().info("[NavCore] 웨이포인트 주행 중단")
                 return
@@ -286,24 +317,57 @@ class NavCore:
         # 5. 최종 목적지로 이동
         self._node.get_logger().info(
             f"[NavCore] → 최종 목적지 ({target_x:.3f}, {target_y:.3f})"
+            + (f" [PID r={pid_zone_radius:.2f}m]" if pid_zone_radius > 0 else "")
         )
-        success = self._blocking_navigate(target_x, target_y, target_yaw)
+        if pid_zone_radius > 0.0:
+            success = self._blocking_navigate_with_pid(
+                target_x, target_y, target_yaw, pid_zone_radius
+            )
+        else:
+            success = self._blocking_navigate(target_x, target_y, target_yaw)
 
-        # 6. 완료 콜백
         if done_callback:
             done_callback(success)
 
-    def _blocking_navigate(self, x: float, y: float, yaw: float = 0.0) -> bool:
+    def _blocking_navigate_with_pid(self, x: float, y: float, yaw: float = 0.0,
+                                     pid_zone_radius: float = 0.3) -> bool:
+        """
+        Nav2로 이동 시작 후, pid_zone_radius 이내 진입 시 PID로 전환하는 블로킹 이동.
+
+        흐름:
+          1. 목표 상태 설정 + zone_check 타이머 시작
+          2. Nav2 goal 전송
+          3. Nav2 완료 or PID 전환을 폴링으로 대기
+             - zone_check가 PID로 전환하면 Nav2가 취소되고 _pid_loop 시작
+             - _pid_loop 도착 시 _nav_done_cb 호출 → done_event set
+          4. 결과 반환
+        """
         if not self._nav_client.wait_for_server(timeout_sec=10.0):
-            self._node.get_logger().error('[NavCore] 액션 서버 없음')
+            self._node.get_logger().error('[NavCore] _blocking_navigate_with_pid: 액션 서버 없음')
             return False
 
+        # 목표 상태 설정
+        self._goal_x          = x
+        self._goal_y          = y
+        self._goal_yaw        = yaw
+        self._pid_zone_radius = pid_zone_radius
+        self._nav_mode        = 'NAV2'
+        self._nav_abort       = False
+
+        done_event   = threading.Event()
+        result_store = [False]
+
+        def _on_done(success):
+            result_store[0] = bool(success)
+            done_event.set()
+
+        self._nav_done_cb = _on_done
+
+        # Nav2 goal 전송
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
-
         send_future = self._nav_client.send_goal_async(goal)
 
-        # executor가 MultiThreadedExecutor이므로 이미 스핀 중 — 폴링으로 대기
         deadline = time.time() + 10.0
         while not send_future.done():
             if self._nav_abort:
@@ -321,7 +385,62 @@ class NavCore:
         self._current_goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
 
-        # 주행 완료 대기 — 타임아웃 없이 폴링 (주행 시간 예측 불가)
+        # zone_check 타이머 시작 (PID 전환 감시)
+        self._restart_timer('zone')
+
+        # Nav2 완료 또는 done_event(PID 완료) 대기
+        while not result_future.done() and not done_event.is_set():
+            if self._nav_abort:
+                goal_handle.cancel_goal_async()
+                self._cancel_timer('zone')
+                self._cancel_timer('pid')
+                self._nav_mode = 'IDLE'
+                return False
+            time.sleep(0.05)
+
+        if done_event.is_set():
+            # PID가 먼저 완료됨
+            return result_store[0]
+
+        # Nav2가 먼저 완료됨
+        if self._nav_mode == 'PID':
+            # zone_check가 Nav2를 취소하고 PID 진행 중 → PID 완료 대기
+            done_event.wait()
+            return result_store[0]
+
+        # PID 전환 없이 Nav2 직접 완료
+        self._cancel_timer('zone')
+        self._nav_mode    = 'IDLE'
+        self._nav_done_cb = None
+        return result_future.result().status == 4
+
+    def _blocking_navigate(self, x: float, y: float, yaw: float = 0.0) -> bool:
+        if not self._nav_client.wait_for_server(timeout_sec=10.0):
+            self._node.get_logger().error('[NavCore] 액션 서버 없음')
+            return False
+
+        goal = NavigateToPose.Goal()
+        goal.pose = self._make_pose_stamped(x, y, yaw)
+
+        send_future = self._nav_client.send_goal_async(goal)
+
+        deadline = time.time() + 10.0
+        while not send_future.done():
+            if self._nav_abort:
+                return False
+            if time.time() > deadline:
+                self._node.get_logger().error('[NavCore] goal 전송 타임아웃')
+                return False
+            time.sleep(0.05)
+
+        goal_handle = send_future.result()
+        if not goal_handle.accepted:
+            self._node.get_logger().warn('[NavCore] goal 거절됨')
+            return False
+
+        self._current_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+
         while not result_future.done():
             if self._nav_abort:
                 goal_handle.cancel_goal_async()
@@ -348,7 +467,7 @@ class NavCore:
         if start == goal:
             return [start]
 
-        # edges는 단방향으로 정의되어 있지만 양방향으로 취급
+        # edges는 단방향 정의이지만 양방향으로 취급
         adj: dict[str, set[str]] = {}
         for wp_id, neighbors in self._wp_edges.items():
             adj.setdefault(wp_id, set()).update(neighbors)
@@ -388,6 +507,44 @@ class NavCore:
             self._node.get_logger().warn(f'[NavCore] TF 실패: {e}')
             return None, None
 
+    def _get_current_yaw(self) -> float | None:
+        """TF로 현재 로봇 yaw 반환. 실패 시 None."""
+        if not self._has_tf:
+            return None
+        try:
+            import rclpy.duration
+            trans = self._tf_buffer.lookup_transform(
+                'map', 'base_footprint', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+            q = trans.transform.rotation
+            return math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+            )
+        except Exception as e:
+            self._node.get_logger().warn(f'[NavCore] TF yaw 실패: {e}')
+            return None
+
+    # ── 타이머 관리 ───────────────────────────────────────────
+
+    def _restart_timer(self, kind: str):
+        """kind: 'zone' | 'pid'"""
+        if kind == 'zone':
+            self._cancel_timer('zone')
+            self._zone_timer = self._node.create_timer(ZONE_CHECK_PERIOD, self._zone_check)
+        elif kind == 'pid':
+            self._cancel_timer('pid')
+            self._pid_timer = self._node.create_timer(PID_PERIOD, self._pid_loop)
+
+    def _cancel_timer(self, kind: str):
+        if kind == 'zone' and self._zone_timer is not None:
+            self._zone_timer.cancel()
+            self._zone_timer = None
+        elif kind == 'pid' and self._pid_timer is not None:
+            self._pid_timer.cancel()
+            self._pid_timer = None
+
     # ── 기타 유틸 ─────────────────────────────────────────────
 
     def cmd_vel(self, linear_x: float = 0.0, angular_z: float = 0.0):
@@ -419,23 +576,6 @@ class NavCore:
                 return zone_id
         return None
 
-    def _restart_timer(self, kind: str):
-        """kind: 'zone' | 'pid'"""
-        if kind == 'zone':
-            self._cancel_timer('zone')
-            self._zone_timer = self._node.create_timer(ZONE_CHECK_PERIOD, self._zone_check)
-        elif kind == 'pid':
-            self._cancel_timer('pid')
-            self._pid_timer = self._node.create_timer(PID_PERIOD, self._pid_loop)
-
-    def _cancel_timer(self, kind: str):
-        if kind == 'zone' and self._zone_timer is not None:
-            self._zone_timer.cancel()
-            self._zone_timer = None
-        elif kind == 'pid' and self._pid_timer is not None:
-            self._pid_timer.cancel()
-            self._pid_timer = None
-
     @staticmethod
     def _make_pose_stamped(x: float, y: float, yaw: float) -> PoseStamped:
         pose = PoseStamped()
@@ -446,16 +586,15 @@ class NavCore:
         pose.pose.orientation.w = math.cos(yaw / 2.0)
         return pose
 
-    def _on_goal_accepted(self, future, done_callback):
-        """비동기 navigate_to_pose용 콜백 (기존 호환)."""
+    def _on_goal_accepted(self, future, gen: int):
+        """비동기 navigate_to_pose 콜백."""
+        if gen != self._nav_gen:
+            return  # 이전 세대 goal — 무시
         goal_handle = future.result()
         if not goal_handle.accepted:
             self._node.get_logger().warn('[NavCore] 목표 거절됨')
             return
         self._current_goal_handle = goal_handle
-        result_future = goal_handle.get_result_async()
-        if done_callback:
-            result_future.add_done_callback(done_callback)
 
     @staticmethod
     def _ray_cast(px: float, py: float, polygon: list) -> bool:

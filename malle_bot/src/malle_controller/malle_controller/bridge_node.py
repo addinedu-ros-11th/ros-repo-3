@@ -56,9 +56,11 @@ CAMERA_HEIGHT  = 480
 try:
     import rclpy
     from rclpy.node import Node
-    from geometry_msgs.msg import Twist
+    from rclpy.action import ActionClient
+    from geometry_msgs.msg import Twist, PoseStamped
     from nav_msgs.msg import Odometry
     from std_msgs.msg import String, Float32, Empty
+    from nav2_msgs.action import NavigateToPose
     HAS_ROS2 = True
 except ImportError:
     HAS_ROS2 = False
@@ -395,6 +397,7 @@ if HAS_ROS2:
             self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
             self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
+            self._nav2_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
             self.get_logger().info("Bridge ready.")
@@ -465,12 +468,23 @@ if HAS_ROS2:
             self._mission_trigger_pub.publish(msg)    
 
         def send_nav_goal(self, x: float, y: float, theta: float):
-            """폴백용 — MissionExecutor 없을 때만 사용."""
-            import json as _j
-            msg = String()
-            msg.data = _j.dumps({"action": "navigate_to_pose", "x": x, "y": y, "theta": theta})
-            self._task_command_pub.publish(msg)
-            self.get_logger().info(f"[fallback] Nav goal: ({x:.3f}, {y:.3f})")
+            """Nav2 NavigateToPose 액션으로 직접 이동 명령."""
+            import math as _math
+            if not self._nav2_client.wait_for_server(timeout_sec=3.0):
+                self.get_logger().error('[bridge] Nav2 액션 서버 없음')
+                return
+
+            goal = NavigateToPose.Goal()
+            goal.pose = PoseStamped()
+            goal.pose.header.frame_id = 'map'
+            goal.pose.header.stamp = self.get_clock().now().to_msg()
+            goal.pose.pose.position.x = float(x)
+            goal.pose.pose.position.y = float(y)
+            goal.pose.pose.orientation.z = _math.sin(theta / 2.0)
+            goal.pose.pose.orientation.w = _math.cos(theta / 2.0)
+
+            self._nav2_client.send_goal_async(goal)
+            self.get_logger().info(f"[bridge] Nav2 goal 전송: ({x:.3f}, {y:.3f})")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -503,7 +517,7 @@ def main():
 
         try:
             from malle_controller.mission_executor import MissionExecutor
-            executor = MissionExecutor()
+            executor = MissionExecutor(api_base_url=MALLE_SERVICE_URL)
             _mission_executor = executor
             print("[bridge_node] MissionExecutor 로드 완료")
         except Exception as e:

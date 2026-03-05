@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Enum, Numeric, Text
+from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Enum, Numeric, LargeBinary
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -17,8 +17,7 @@ class RestrictedZone(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
-    # MySQL POLYGON stored as WKT text for portability
-    polygon_wkt: Mapped[str] = mapped_column(Text, nullable=False)
+    polygon: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     srid: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     updated_by_source: Mapped[str] = mapped_column(String(30), nullable=False, default="dashboard")
@@ -31,7 +30,7 @@ class NavRuleZone(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
-    polygon_wkt: Mapped[str] = mapped_column(Text, nullable=False)
+    polygon: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     srid: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     rule_type: Mapped[NavRuleType] = mapped_column(Enum(NavRuleType), nullable=False)

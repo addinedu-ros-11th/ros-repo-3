@@ -21,7 +21,7 @@ from std_msgs.msg import String
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
 from malle_controller.poi_manager import PoiManager
-from malle_controller.pid_edges import PID_EDGES, get_pid_radius
+from malle_controller.pid_edges import get_pid_radius
 
 
 class GuideExecutor(NavCore):
@@ -43,6 +43,7 @@ class GuideExecutor(NavCore):
         self._session_id: int | None = None
         self._queue: deque[dict] = deque()  # guide_queue_item dicts
         self._current_item: dict | None = None
+        self._prev_poi_id: str = ''    # PID edge 판단용 이전 POI
         self._lock = threading.Lock()
 
     # ── 외부 인터페이스 ──────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ class GuideExecutor(NavCore):
             self._queue          = deque(queue_items)
             self._active         = True
             self._waiting_at_poi = False
+            self._prev_poi_id    = ''
 
         self._log.info(
             f'[GuideExecutor] 시작 session={session_id} '
@@ -138,14 +140,19 @@ class GuideExecutor(NavCore):
             self._navigate_next()
             return
 
+        pid_radius = get_pid_radius(self._prev_poi_id, str(poi_id))
+        self._prev_poi_id = str(poi_id)
+
         self._log.info(
             f'[GuideExecutor] → {poi_name} '
             f'item_id={item_id} ({x:.3f}, {y:.3f})'
+            + (f' [PID r={pid_radius:.2f}m]' if pid_radius > 0 else '')
         )
 
         self.navigate_via_waypoints(
             target_x=x, target_y=y, target_yaw=0.0,
             done_callback=lambda success: self._on_nav_done(success, item_id, poi_name),
+            pid_zone_radius=pid_radius,
         )
 
     def _on_nav_done(self, success: bool, item_id: int, poi_name: str):
