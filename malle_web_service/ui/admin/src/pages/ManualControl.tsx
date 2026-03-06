@@ -96,10 +96,10 @@ export default function ManualControlPage() {
 
           {/* Camera feed */}
           <div className="flex-1 bg-foreground/90 rounded-3xl flex items-center justify-center relative overflow-hidden">
-            <div className="text-center">
-              <MI icon="videocam" className="text-muted-foreground/40 text-7xl" />
-              <p className="text-muted-foreground/40 text-sm mt-2">Camera Feed — Demo Mode</p>
-            </div>
+              <div className="text-center">
+                <MI icon="videocam" className="text-muted-foreground/40 text-7xl" />
+                <p className="text-muted-foreground/40 text-sm mt-2">Camera Feed — Demo Mode</p>
+              </div>
             {moving && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-bold animate-pulse">
                 MOVING: {moving}
@@ -108,7 +108,9 @@ export default function ManualControlPage() {
 
             {/* D-pad controls */}
             {teleopState.active && (
-              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 grid grid-cols-3 gap-2 w-56 place-items-center">
+              <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 grid grid-cols-3 gap-2 w-56 place-items-center transition-opacity duration-200 ${
+                teleopState.active ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+              }`}>
                 <div />
                 <button
                   onMouseDown={() => handleDirection('FWD', true)}
@@ -166,7 +168,7 @@ export default function ManualControlPage() {
           </div>
 
           {/* Teleop Log */}
-          <div className="bg-card rounded-2xl p-4 border border-border max-h-40 overflow-auto">
+          <div className="bg-card rounded-2xl p-4 border border-border h-40 overflow-auto">
             <h4 className="text-sm font-bold text-foreground mb-2">Teleop Log</h4>
             <table className="w-full text-xs">
               <thead>
