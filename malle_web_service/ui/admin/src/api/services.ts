@@ -137,7 +137,7 @@ export interface LockboxSlotRes {
 }
 
 export const lockboxApi = {
-  getSlots: (robotId: number) => api.get<LockboxSlotRes[]>(`/robots/${robotId}/lockbox/slots`),
+  getSlots: (robotId: number) => api.get<LockboxSlotRes[]>(`/robots/${robotId}/lockbox`),
 };
 
 // --- Sessions (dashboard view) ---
