@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '@/store/appStore';
 import { BottomNav } from '@/components/layout/BottomNav';
@@ -10,11 +10,9 @@ const MAP_WIDTH_M  = 2.45;
 const MAP_HEIGHT_M = 2.0;
 const MAP_OFFSET   = { left: 3.85, top: 4.65, right: 95.96, bottom: 95.12 };
 
-/**
- * 미터 좌표 → 맵 컨테이너 내 % 위치 변환
- * ROS2 좌표계: x = 오른쪽 방향, y = 위쪽 방향
- * CSS: left % = x/width, top % = (height - y)/height  (y축 반전)
- */
+const MIN_SCALE = 1;
+const MAX_SCALE = 6;
+
 function toMapPercent(x_m: number, y_m: number) {
   const innerW = MAP_OFFSET.right  - MAP_OFFSET.left;
   const innerH = MAP_OFFSET.bottom - MAP_OFFSET.top;
@@ -24,6 +22,16 @@ function toMapPercent(x_m: number, y_m: number) {
     left: `${Math.min(Math.max(left, 0), 100)}%`,
     top:  `${Math.min(Math.max(top,  0), 100)}%`,
   };
+}
+
+/** 두 터치 포인트 사이의 거리 */
+function getTouchDist(a: React.Touch, b: React.Touch) {
+  return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+}
+
+/** 두 터치 포인트의 중심점 */
+function getTouchMid(a: React.Touch, b: React.Touch) {
+  return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 };
 }
 
 export default function MapPage() {
@@ -36,6 +44,155 @@ export default function MapPage() {
   const isTaskMode = isActive && session.type === 'TASK' && !!taskMission;
   const selectedPoiData = pois.find(p => p.id === selectedPoi);
 
+  // ── 줌/패닝 상태 ──────────────────────────────────────────────
+  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const mapWrapRef = useRef<HTMLDivElement>(null);
+
+  // 드래그 패닝
+  const isDragging = useRef(false);
+  const lastPointer = useRef({ x: 0, y: 0 });
+  const didDrag = useRef(false); // 드래그 vs 탭 구분
+
+  // 핀치 줌
+  const lastPinchDist = useRef<number | null>(null);
+  const lastPinchMid  = useRef<{ x: number; y: number } | null>(null);
+
+  const clamp = useCallback((x: number, y: number, scale: number) => {
+    const s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+    return { x, y, scale: s };
+  }, []);
+
+  /** scale + origin 기준 새 translate 계산 */
+  const zoomAt = useCallback((
+    prev: { x: number; y: number; scale: number },
+    originX: number, originY: number,
+    newScale: number
+  ) => {
+    const ratio = newScale / prev.scale;
+    return clamp(
+      originX - ratio * (originX - prev.x),
+      originY - ratio * (originY - prev.y),
+      newScale
+    );
+  }, [clamp]);
+
+  // ── 마우스 휠 ────────────────────────────────────────────────
+  useEffect(() => {
+    const el = mapWrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      setTransform(prev => {
+        const delta = e.deltaY > 0 ? 0.85 : 1.15;
+        return zoomAt(prev, ox, oy, Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * delta)));
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoomAt]);
+
+  // ── 터치 이벤트 ──────────────────────────────────────────────
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      lastPinchDist.current = getTouchDist(a, b);
+      lastPinchMid.current  = getTouchMid(a, b);
+    } else if (e.touches.length === 1) {
+      lastPointer.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      didDrag.current = false;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault(); // 브라우저 스크롤/핀치 막기
+    if (e.touches.length === 2) {
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const dist = getTouchDist(a, b);
+      const mid  = getTouchMid(a, b);
+      const rect = mapWrapRef.current!.getBoundingClientRect();
+
+      if (lastPinchDist.current !== null && lastPinchMid.current !== null) {
+        const scaleRatio = dist / lastPinchDist.current;
+        const ox = mid.x - rect.left;
+        const oy = mid.y - rect.top;
+
+        // 핀치 줌 + 핀치 이동(pan) 동시 처리
+        const dx = mid.x - lastPinchMid.current.x;
+        const dy = mid.y - lastPinchMid.current.y;
+
+        setTransform(prev => {
+          const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * scaleRatio));
+          const zoomed   = zoomAt(prev, ox, oy, newScale);
+          return clamp(zoomed.x + dx, zoomed.y + dy, zoomed.scale);
+        });
+      }
+      lastPinchDist.current = dist;
+      lastPinchMid.current  = mid;
+    } else if (e.touches.length === 1) {
+      const dx = e.touches[0].clientX - lastPointer.current.x;
+      const dy = e.touches[0].clientY - lastPointer.current.y;
+      lastPointer.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag.current = true;
+      setTransform(prev => clamp(prev.x + dx, prev.y + dy, prev.scale));
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) {
+      lastPinchDist.current = null;
+      lastPinchMid.current  = null;
+    }
+  };
+
+  // ── 마우스 드래그 (데스크톱) ─────────────────────────────────
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as Element).closest('[data-poi]')) return;
+    isDragging.current   = true;
+    didDrag.current      = false;
+    lastPointer.current  = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging.current) return;
+    const dx = e.clientX - lastPointer.current.x;
+    const dy = e.clientY - lastPointer.current.y;
+    lastPointer.current = { x: e.clientX, y: e.clientY };
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didDrag.current = true;
+    setTransform(prev => clamp(prev.x + dx, prev.y + dy, prev.scale));
+  };
+
+  const handleMouseUp   = () => { isDragging.current = false; };
+  const handleMouseLeave = () => { isDragging.current = false; };
+
+  // ── 줌 버튼 ──────────────────────────────────────────────────
+  const zoomIn  = () => {
+    const rect = mapWrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setTransform(prev => zoomAt(prev, rect.width / 2, rect.height / 2, Math.min(MAX_SCALE, prev.scale * 1.4)));
+  };
+  const zoomOut = () => {
+    const rect = mapWrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setTransform(prev => zoomAt(prev, rect.width / 2, rect.height / 2, Math.max(MIN_SCALE, prev.scale * 0.7)));
+  };
+  const resetView = () => setTransform({ x: 0, y: 0, scale: 1 });
+
+  // 로봇 위치로 이동
+  const centerOnRobot = () => {
+    if (!robot || !mapWrapRef.current) return;
+    const rect = mapWrapRef.current.getBoundingClientRect();
+    const pct  = toMapPercent(robot.location.x, robot.location.y);
+    const rx   = parseFloat(pct.left) / 100 * rect.width;
+    const ry   = parseFloat(pct.top)  / 100 * rect.height;
+    const cx   = rect.width  / 2;
+    const cy   = rect.height / 2;
+    setTransform(prev => clamp(cx - rx * prev.scale, cy - ry * prev.scale, prev.scale));
+  };
+
+  // ── 헬퍼 ─────────────────────────────────────────────────────
   const handleAddToGuide = () => {
     if (selectedPoiData && !isTaskMode) {
       addToGuideQueue(selectedPoiData);
@@ -43,7 +200,6 @@ export default function MapPage() {
     }
   };
 
-  // POI 타입별 아이콘
   const poiIcon = (category: string) => {
     const c = (category || '').toLowerCase();
     if (c.includes('cafe') || c.includes('dining') || c.includes('food')) return 'local_cafe';
@@ -62,133 +218,168 @@ export default function MapPage() {
         {/* ── 맵 영역 ── */}
         <div className="flex-1 relative bg-muted overflow-hidden">
 
-          {/* 맵 컨테이너 — 2.5:2 비율 유지, 중앙 정렬 */}
-          <div className="absolute inset-0 flex items-center justify-center p-4">
+          {/* 줌/패닝 가능한 외부 컨테이너 */}
+          <div
+            ref={mapWrapRef}
+            className="absolute inset-0 overflow-hidden touch-none"
+            style={{ cursor: isDragging.current ? 'grabbing' : 'grab' }}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          >
+            {/* 맵 컨테이너 — 변환 적용 */}
             <div
-              className="relative rounded-2xl overflow-hidden border-2 border-border/60 shadow-xl"
+              className="absolute inset-0 flex items-center justify-center p-4"
               style={{
-                /* 가로 2.5 : 세로 2 비율 */
-                aspectRatio: '2.45 / 2',
-                width: '100%',
-                maxWidth: '380px',
-                maxHeight: 'calc(100vh - 200px)',
+                transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                transformOrigin: '0 0',
+                willChange: 'transform',
               }}
             >
-              {/* PGM 맵 이미지 배경 */}
-              <img
-                src="/map_end_end.png"
-                alt="Mall Map"
-                className="absolute inset-0 w-full h-full"
-                style={{ imageRendering: 'pixelated', objectFit: 'fill' }}
-                draggable={false}
-              />
+              <div
+                className="relative rounded-2xl overflow-hidden border-2 border-border/60 shadow-xl"
+                style={{
+                  aspectRatio: '2.45 / 2',
+                  width: '100%',
+                  maxWidth: '380px',
+                  maxHeight: 'calc(100vh - 200px)',
+                }}
+              >
+                {/* PGM 맵 이미지 */}
+                <img
+                  src="/map_end_end.png"
+                  alt="Mall Map"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ imageRendering: 'pixelated', objectFit: 'fill' }}
+                  draggable={false}
+                />
 
-              {/* 반투명 오버레이 (가독성) */}
-              <div className="absolute inset-0 bg-background/20" />
+                {/* 반투명 오버레이 */}
+                <div className="absolute inset-0 bg-background/20" />
 
-              {/* ── POI 마커 ── */}
-              {pois.map((poi) => {
-                const pos = toMapPercent(poi.x, poi.y);
-                return (
-                  <Tooltip key={poi.id}>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => setSelectedPoi(poi.id)}
-                        className={`absolute flex flex-col items-center gap-0.5 transform -translate-x-1/2 -translate-y-1/2 transition-all z-10 ${
-                          selectedPoi === poi.id ? 'scale-125 z-20' : 'hover:scale-110'
-                        }`}
-                        style={pos}
-                      >
-                        {/* 마커 원 */}
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center shadow-md border-2 transition-colors ${
-                          selectedPoi === poi.id
-                            ? 'bg-primary border-primary text-primary-foreground'
-                            : 'bg-card border-border text-foreground'
-                        }`}>
-                          <span className="material-icons-round text-xs">
-                            {poiIcon(poi.category)}
+                {/* ── POI 마커 ── */}
+                {pois.map((poi) => {
+                  const pos = toMapPercent(poi.x, poi.y);
+                  return (
+                    <Tooltip key={poi.id}>
+                      <TooltipTrigger asChild>
+                        <button
+                          data-poi={poi.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!didDrag.current) setSelectedPoi(poi.id);
+                          }}
+                          className={`absolute flex flex-col items-center gap-0.5 transform -translate-x-1/2 -translate-y-1/2 transition-all z-10 ${
+                            selectedPoi === poi.id ? 'scale-125 z-20' : 'hover:scale-110'
+                          }`}
+                          style={pos}
+                        >
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center shadow-md border-2 transition-colors ${
+                            selectedPoi === poi.id
+                              ? 'bg-primary border-primary text-primary-foreground'
+                              : 'bg-card border-border text-foreground'
+                          }`}>
+                            <span className="material-icons-round text-xs">
+                              {poiIcon(poi.category)}
+                            </span>
+                          </div>
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md shadow-sm whitespace-nowrap max-w-[64px] truncate ${
+                            selectedPoi === poi.id
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-card/90 text-foreground'
+                          }`}>
+                            {poi.name}
                           </span>
-                        </div>
-                        {/* 이름 라벨 */}
-                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md shadow-sm whitespace-nowrap max-w-[64px] truncate ${
-                          selectedPoi === poi.id
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-card/90 text-foreground'
-                        }`}>
-                          {poi.name}
-                        </span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="text-xs font-semibold">
-                      {poi.name} ({poi.x.toFixed(2)}m, {poi.y.toFixed(2)}m)
-                    </TooltipContent>
-                  </Tooltip>
-                );
-              })}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs font-semibold">
+                        {poi.name} ({poi.x.toFixed(2)}m, {poi.y.toFixed(2)}m)
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                })}
 
-              {/* ── 로봇 마커 ── */}
-              {isActive && robot && (
-                <div
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2 z-30"
-                  style={toMapPercent(robot.location.x, robot.location.y)}
-                >
-                  <div className="relative">
-                    <div className="w-9 h-9 rounded-full bg-primary flex items-center justify-center shadow-lg">
-                      <span className="material-icons-round text-primary-foreground text-lg">smart_toy</span>
-                    </div>
-                    {/* 펄스 링 */}
-                    <div className="absolute inset-0 rounded-full bg-primary/30 animate-ping" />
-                    {/* 이름 태그 */}
-                    <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 bg-foreground text-background text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">
-                      {robot.name}
+                {/* ── 로봇 마커 ── */}
+                {isActive && robot && (
+                  <div
+                    className="absolute transform -translate-x-1/2 -translate-y-1/2 z-30"
+                    style={toMapPercent(robot.location.x, robot.location.y)}
+                  >
+                    <div className="relative">
+                      <div className="w-9 h-9 rounded-full bg-primary flex items-center justify-center shadow-lg">
+                        <span className="material-icons-round text-primary-foreground text-lg">smart_toy</span>
+                      </div>
+                      <div className="absolute inset-0 rounded-full bg-primary/30 animate-ping" />
+                      <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 bg-foreground text-background text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap">
+                        {robot.name}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* ── 좌표 확인용 임시 마커 ── */}
-              {[
-                { label: '(0,0)',       x: 0,    y: 0 },
-                { label: '(2.45,2)',    x: 2.45, y: 2 },
-              ].map(({ label, x, y }) => (
-                <div
-                  key={label}
-                  className="absolute transform -translate-x-1/2 -translate-y-1/2 z-50"
-                  style={toMapPercent(x, y)}
-                >
-                  <div className="w-3 h-3 rounded-full bg-red-500 shadow-md" />
-                  <span className="absolute top-3 left-1/2 -translate-x-1/2 text-[9px] text-red-500 font-bold whitespace-nowrap">
-                    {label}
-                  </span>
-                </div>
-              ))}
+                {/* ── 좌표 확인용 임시 마커 ── */}
+                {[
+                  { label: '(0,0)',    x: 0,    y: 0 },
+                  { label: '(2.45,2)', x: 2.45, y: 2 },
+                ].map(({ label, x, y }) => (
+                  <div
+                    key={label}
+                    className="absolute transform -translate-x-1/2 -translate-y-1/2 z-50"
+                    style={toMapPercent(x, y)}
+                  >
+                    <div className="w-3 h-3 rounded-full bg-red-500 shadow-md" />
+                    <span className="absolute top-3 left-1/2 -translate-x-1/2 text-[9px] text-red-500 font-bold whitespace-nowrap">
+                      {label}
+                    </span>
+                  </div>
+                ))}
 
-              {/* ── 축척 표시 ── */}
-              {/* <div className="absolute bottom-2 left-2 flex items-center gap-1">
-                <div className="h-[2px] w-10 bg-foreground/60" />
-                <span className="text-[9px] text-foreground/60 font-medium">0.5m</span>
-              </div> */}
-
-              {/* ── 좌표 원점 표시 (좌하단) ── */}
-              <div className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+                {/* 좌표 원점 */}
+                <div className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
+              </div>
             </div>
           </div>
 
-          {/* ── 줌 컨트롤 ── */}
-          <div className="absolute top-4 right-4 flex flex-col gap-2">
-            <button className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm">
+          {/* ── 줌 컨트롤 (UI — 변환 영향 없음) ── */}
+          <div className="absolute top-4 right-4 flex flex-col gap-2 z-20 pointer-events-auto">
+            <button
+              onClick={zoomIn}
+              className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm"
+            >
               <span className="material-icons-round text-foreground">add</span>
             </button>
-            <button className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm">
+            <button
+              onClick={zoomOut}
+              className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm"
+            >
               <span className="material-icons-round text-foreground">remove</span>
             </button>
-            <button className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm mt-2">
+            <button
+              onClick={centerOnRobot}
+              className="w-10 h-10 rounded-full bg-card shadow-md flex items-center justify-center active-press-sm mt-2"
+            >
               <span className="material-icons-round text-primary">my_location</span>
             </button>
           </div>
 
+          {/* 줌 배율 표시 */}
+          {transform.scale !== 1 && (
+            <div className="absolute bottom-3 right-4 z-20 pointer-events-none">
+              <button
+                onClick={resetView}
+                className="pointer-events-auto text-[10px] text-muted-foreground bg-card/90 px-2 py-1 rounded-md border border-border shadow-sm active-press-sm"
+              >
+                {Math.round(transform.scale * 100)}% · 초기화
+              </button>
+            </div>
+          )}
+
           {/* ── 범례 ── */}
-          <div className="absolute top-4 left-4 bg-card/90 backdrop-blur-sm rounded-xl p-3 shadow-md">
+          <div className="absolute top-4 left-4 bg-card/90 backdrop-blur-sm rounded-xl p-3 shadow-md z-20 pointer-events-none">
             <p className="text-xs font-bold text-muted-foreground mb-2">Legend</p>
             <div className="space-y-1.5">
               <div className="flex items-center gap-2">
