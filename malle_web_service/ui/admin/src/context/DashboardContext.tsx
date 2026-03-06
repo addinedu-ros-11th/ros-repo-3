@@ -84,9 +84,9 @@ interface DashboardContextValue extends DashboardState {
   releaseEStop: (robotId: string) => void;
   stopMission: (missionId: string) => void;
   restartMission: (missionId: string) => void;
-  toggleZone: (zoneId: string) => void;
-  addZone: (zone: Zone) => void;
-  deleteZone: (zoneId: string) => void;
+  toggleZone: (zoneId: string) => Promise<void>;
+  addZone: (zone: Omit<Zone, 'id'>) => Promise<void>;
+  deleteZone: (zoneId: string) => Promise<void>;
   startTeleop: (robotId: string) => void;
   stopTeleop: () => void;
   addTeleopLog: (action: string) => void;
@@ -197,7 +197,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         eta: r.state?.eta_sec ?? null,
         sessionId: null,
         lastSeen: r.last_seen_at ? new Date(r.last_seen_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A',
-        eStopActive: r.state?.stop_state === 'ESTOP',
+        eStopActive: r.state?.stop_state === 'ESTOP' || r.state?.stop_state === 'E_STOP',
         eStopSource: r.state?.stop_source as Robot['eStopSource'] ?? null,
         commsStatus: r.is_online ? 'STRONG' : 'LOST',
         sensorStatus: 'OK',
@@ -254,12 +254,17 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     zoneApi.list().then((res) => {
       if (!res?.length) return;
       const mapped: Zone[] = res.map((z) => ({
-        id: `Z-${z.id}`,
+        id: String(z.id),
         name: z.name,
-        type: (z.zone_kind?.toUpperCase() || 'CAUTION') as Zone['type'],
+        type: (z.zone_type?.toUpperCase() || 'CAUTION') as Zone['type'],
         active: z.is_active,
         polygon: parseWkt(z.polygon_wkt),
-        rules: z.speed_limit_mps ? { maxSpeed: z.speed_limit_mps, priority: 'MEDIUM' as const } : undefined,
+        rules: {
+          priority: (z.priority ?? 'MEDIUM') as ZoneRules['priority'],
+          maxSpeed: z.speed_limit_mps ?? undefined,
+          oneWay: z.one_way ?? undefined,
+          enhancedObstacleAvoidance: z.enhanced_avoidance ?? undefined,
+        },
       }));
       setZones(mapped);
     }).catch(() => {});
@@ -420,6 +425,33 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         payload: data,
       }, ...prev].slice(0, 50));
     }, []),
+
+    onZoneUpdated: useCallback((action: string, zone: Record<string, any>) => {
+      const mapped: Zone = {
+        id: String(zone.id),
+        name: zone.name,
+        type: zone.zone_type as Zone['type'],
+        active: zone.is_active,
+        polygon: parseWkt(zone.polygon_wkt),
+        rules: {
+          priority: (zone.priority ?? 'MEDIUM') as ZoneRules['priority'],
+          maxSpeed: zone.speed_limit_mps ?? undefined,
+          oneWay: zone.one_way ?? undefined,
+          enhancedObstacleAvoidance: zone.enhanced_avoidance ?? undefined,
+        },
+      };
+
+      if (action === 'created') {
+        setZones(prev => {
+          const exists = prev.some(z => z.id === mapped.id);
+          return exists ? prev : [...prev, mapped];
+        });
+      } else if (action === 'updated') {
+        setZones(prev => prev.map(z => z.id === mapped.id ? mapped : z));
+      } else if (action === 'deleted') {
+        setZones(prev => prev.filter(z => z.id !== String(zone.id)));
+      }
+    }, []),  
   });
 
   /* ───── Actions ───── */
@@ -458,28 +490,31 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     if (!isNaN(numId)) missionApi.updateStatus(numId, 'RUNNING').catch(() => {});
   }, []);
 
-  const toggleZone = useCallback((zoneId: string) => {
-    setZones(prev => prev.map(z => z.id === zoneId ? { ...z, active: !z.active } : z));
-    const numId = parseInt(zoneId.replace('Z-', ''));
-    const zone = zones.find(z => z.id === zoneId);
-    if (!isNaN(numId) && zone) zoneApi.update(numId, { is_active: !zone.active }).catch(() => {});
-  }, [zones]);
-
-  const addZone = useCallback((zone: Zone) => {
-    setZones(prev => [...prev, zone]);
-    zoneApi.create({
-      name: zone.name,
-      polygon_wkt: `POLYGON((${zone.polygon.map(p => `${p.x} ${p.y}`).join(', ')}))`,
-      zone_kind: zone.type.toLowerCase(),
-      is_active: zone.active,
-      speed_limit_mps: zone.rules?.maxSpeed,
-    }).catch(() => {});
+  const toggleZone = useCallback(async (zoneId: string) => {
+    const numId = parseInt(zoneId, 10);
+    if (!isNaN(numId)) {
+      await zoneApi.toggle(numId);
+    }
   }, []);
 
-  const deleteZone = useCallback((zoneId: string) => {
-    setZones(prev => prev.filter(z => z.id !== zoneId));
-    const numId = parseInt(zoneId.replace('Z-', ''));
-    if (!isNaN(numId)) zoneApi.delete(numId).catch(() => {});
+  const addZone = useCallback(async (zone: Omit<Zone, 'id'>) => {
+    await zoneApi.create({
+      name: zone.name,
+      zone_type: zone.type,
+      polygon_wkt: `POLYGON((${[...zone.polygon, zone.polygon[0]].map(p => `${p.x} ${p.y}`).join(', ')}))`,
+      is_active: zone.active,
+      priority: zone.rules?.priority ?? 'MEDIUM',
+      speed_limit_mps: zone.rules?.maxSpeed ?? null,
+      one_way: zone.rules?.oneWay ?? null,
+      enhanced_avoidance: zone.rules?.enhancedObstacleAvoidance ?? null,
+    });
+  }, []);
+
+  const deleteZone = useCallback(async (zoneId: string) => {
+    const numId = parseInt(zoneId, 10);
+    if (!isNaN(numId)) {
+      await zoneApi.delete(numId);
+    }
   }, []);
 
   const startTeleop = useCallback((robotId: string) => {

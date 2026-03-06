@@ -16,19 +16,7 @@ from app.models.lockbox import (  # noqa: F401
     LockboxOpenLog,
 )
 from app.models.shopping import ShoppingList, ShoppingListItem  # noqa: F401
-from app.models.zone import RestrictedZone, NavRuleZone  # noqa: F401
+from app.models.zone import Zone, ZoneType, ZonePriority  # noqa: F401
 from app.models.event import RobotEvent  # noqa: F401
 from app.models.charger import ChargerCurrent  # noqa: F401
 from app.models.congestion import CongestionCurrent  # noqa: F401
-
-# from .enums import RobotMode, SessionStatus, SessionType
-# from .robot import Robot
-# from .session import Session
-
-# __all__ = [
-#     'RobotMode',
-#     'SessionStatus', 
-#     'SessionType',
-#     'Robot',
-#     'Session'
-# ]

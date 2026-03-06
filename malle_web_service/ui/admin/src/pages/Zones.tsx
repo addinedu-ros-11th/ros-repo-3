@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useDashboard } from '@/context/DashboardContext';
-import type { Zone, ZoneRules } from '@/context/DashboardContext';
+import type { Zone } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
 import PageHeader from '@/components/PageHeader';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
@@ -17,10 +17,75 @@ const zoneColors: Record<string, { fill: string; stroke: string; label: string }
 
 type ZoneType = 'RESTRICTED' | 'MAINTENANCE' | 'CAUTION' | 'CONGESTED';
 
+// ---------------------------------------------------------------------------
+// WKT helpers
+// ---------------------------------------------------------------------------
+
+/** UI vertices → WKT polygon string */
+function verticesToWkt(vertices: { x: number; y: number }[]): string {
+  if (vertices.length < 3) return '';
+  const coords = [...vertices, vertices[0]]
+    .map(v => `${v.x} ${v.y}`)
+    .join(', ');
+  return `POLYGON((${coords}))`;
+}
+
+/** WKT polygon string → UI vertices */
+function wktToVertices(wkt: string): { x: number; y: number }[] {
+  const match = wkt.match(/POLYGON\s*\(\(([^)]+)\)\)/i);
+  if (!match) return [];
+  return match[1]
+    .split(',')
+    .map(pair => {
+      const [x, y] = pair.trim().split(/\s+/).map(Number);
+      return { x, y };
+    })
+    .slice(0, -1); // remove closing duplicate
+}
+
+/** Server zone → DashboardContext Zone */
+function serverZoneToLocal(s: ServerZone): Zone {
+  return {
+    id: String(s.id),
+    name: s.name,
+    type: s.zone_type as ZoneType,
+    polygon: wktToVertices(s.polygon_wkt),
+    active: s.is_active,
+    rules: {
+      priority: (s.priority ?? 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH',
+      maxSpeed: s.speed_limit_mps ?? undefined,
+      oneWay: s.one_way ?? undefined,
+      enhancedObstacleAvoidance: s.enhanced_avoidance ?? undefined,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Server zone type
+// ---------------------------------------------------------------------------
+
+interface ServerZone {
+  id: number;
+  name: string;
+  zone_type: string;
+  polygon_wkt: string;
+  is_active: boolean;
+  priority: string;
+  speed_limit_mps: number | null;
+  one_way: boolean | null;
+  enhanced_avoidance: boolean | null;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export default function ZonesPage() {
   const { zones, toggleZone, addZone, deleteZone } = useDashboard();
   const { toast } = useToast();
   const svgRef = useRef<SVGSVGElement>(null);
+
+  const [loading, setLoading] = useState(true);
 
   // Drawing state
   const [drawing, setDrawing] = useState(false);
@@ -40,6 +105,18 @@ export default function ZonesPage() {
   // Delete confirm
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
+  // -------------------------------------------------------------------------
+  // Initial load from server
+  // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    setLoading(false);
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // SVG drawing
+  // -------------------------------------------------------------------------
+
   const getSvgPoint = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const svg = svgRef.current;
     if (!svg) return null;
@@ -56,8 +133,6 @@ export default function ZonesPage() {
     if (!drawing) return;
     const pt = getSvgPoint(e);
     if (!pt) return;
-
-    // Check if clicking near first vertex to close
     if (vertices.length >= 3) {
       const first = vertices[0];
       const dist = Math.sqrt((pt.x - first.x) ** 2 + (pt.y - first.y) ** 2);
@@ -68,7 +143,6 @@ export default function ZonesPage() {
         return;
       }
     }
-
     setVertices(prev => [...prev, pt]);
   }, [drawing, vertices, getSvgPoint]);
 
@@ -86,7 +160,6 @@ export default function ZonesPage() {
     if (pt) setMousePos(pt);
   }, [drawing, getSvgPoint]);
 
-  // Escape to cancel drawing
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && drawing) {
@@ -99,17 +172,8 @@ export default function ZonesPage() {
     return () => window.removeEventListener('keydown', handleKey);
   }, [drawing]);
 
-  const startDrawing = () => {
-    setDrawing(true);
-    setVertices([]);
-    setMousePos(null);
-  };
-
-  const cancelDrawing = () => {
-    setDrawing(false);
-    setVertices([]);
-    setMousePos(null);
-  };
+  const startDrawing = () => { setDrawing(true); setVertices([]); setMousePos(null); };
+  const cancelDrawing = () => { setDrawing(false); setVertices([]); setMousePos(null); };
 
   const resetModal = () => {
     setZoneName('');
@@ -121,57 +185,65 @@ export default function ZonesPage() {
     setEnhancedAvoidance(true);
   };
 
-  const handleSaveZone = () => {
-    if (!zoneName.trim()) return;
+  // -------------------------------------------------------------------------
+  // Save zone — POST to server, WS broadcast will update local state
+  // -------------------------------------------------------------------------
 
-    const rules: ZoneRules = { priority };
-    if (zoneType === 'CAUTION') {
-      rules.maxSpeed = maxSpeed;
-      rules.oneWay = oneWay;
-    } else if (zoneType === 'CONGESTED') {
-      rules.maxSpeed = maxSpeed;
-      rules.enhancedObstacleAvoidance = enhancedAvoidance;
-    }
+  const handleSaveZone = async () => {
+    if (!zoneName.trim() || vertices.length < 3) return;
 
-    const newZone: Zone = {
-      id: `Z-${Date.now().toString(36).toUpperCase()}`,
-      name: zoneName.trim(),
-      type: zoneType,
-      polygon: vertices,
-      active: zoneActive,
-      rules,
-    };
-
-    addZone(newZone);
-
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
     try {
-      fetch('/api/zones', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newZone),
-      }).catch(() => {});
-    } catch {}
+      await addZone({
+        name: zoneName.trim(),
+        type: zoneType,
+        polygon: vertices,
+        active: zoneActive,
+        rules: {
+          priority,
+          maxSpeed: ['CAUTION', 'CONGESTED'].includes(zoneType) ? maxSpeed : undefined,
+          oneWay: zoneType === 'CAUTION' ? oneWay : undefined,
+          enhancedObstacleAvoidance: zoneType === 'CONGESTED' ? enhancedAvoidance : undefined,
+        },
+      });
 
-    toast({ title: 'Zone Created', description: `"${newZone.name}" has been added successfully.` });
-    setShowModal(false);
-    setVertices([]);
-    resetModal();
+      toast({ title: 'Zone Created', description: `"${zoneName.trim()}" has been added.` });
+      setShowModal(false);
+      setVertices([]);
+      resetModal();
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to save zone.', variant: 'destructive' });
+    }
   };
 
-  const handleDeleteZone = (zoneId: string) => {
-    deleteZone(zoneId);
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
-    try { fetch(`/api/zones/${zoneId}`, { method: 'DELETE' }).catch(() => {}); } catch {}
-    toast({ title: 'Zone Deleted', description: 'Zone has been removed.' });
+  // -------------------------------------------------------------------------
+  // Delete zone — DELETE to server
+  // -------------------------------------------------------------------------
+
+  const handleDeleteZone = async (zoneId: string) => {
+    try {
+      await deleteZone(zoneId);
+      toast({ title: 'Zone Deleted', description: 'Zone has been removed.' });
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to delete zone.', variant: 'destructive' });
+    }
     setDeleteConfirm(null);
   };
 
-  const handleToggleZone = (zoneId: string) => {
-    toggleZone(zoneId);
-    // TODO: Connect to backend — syncs with DB and ROS2 costmap
-    try { fetch(`/api/zones/${zoneId}/toggle`, { method: 'PATCH' }).catch(() => {}); } catch {}
+  // -------------------------------------------------------------------------
+  // Toggle zone — PATCH /zones/:id/toggle
+  // -------------------------------------------------------------------------
+
+  const handleToggleZone = async (zoneId: string) => {
+    try {
+      await toggleZone(zoneId);
+    } catch (e) {
+      toast({ title: 'Error', description: 'Failed to toggle zone.', variant: 'destructive' });
+    }
   };
+
+  // -------------------------------------------------------------------------
+  // Render helpers
+  // -------------------------------------------------------------------------
 
   const getRulesDisplay = (zone: Zone) => {
     switch (zone.type) {
@@ -183,6 +255,10 @@ export default function ZonesPage() {
     }
   };
 
+  // -------------------------------------------------------------------------
+  // JSX
+  // -------------------------------------------------------------------------
+
   return (
     <div>
       <PageHeader title="Zone Management" subtitle="Configure restricted and special areas" />
@@ -190,11 +266,15 @@ export default function ZonesPage() {
       <div className="flex gap-6 h-[calc(100vh-14rem)]">
         {/* Map */}
         <div className="flex-1 bg-secondary/30 rounded-3xl overflow-hidden relative">
-          {/* Drawing instruction banner */}
           {drawing && (
             <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-semibold shadow-lg flex items-center gap-2">
               <MI icon="draw" className="text-base" />
               Click to place vertices. Click first point or double-click to close polygon.
+            </div>
+          )}
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center z-10">
+              <span className="text-muted-foreground text-sm">Loading zones…</span>
             </div>
           )}
 
@@ -230,8 +310,8 @@ export default function ZonesPage() {
                     strokeDasharray={zone.active ? '' : '6 4'}
                     opacity={zone.active ? 1 : 0.3}
                   />
-                  <text x={zone.polygon[0].x + 5} y={zone.polygon[0].y + 20} className="fill-foreground text-[10px] font-bold">{zone.name}</text>
-                  <text x={zone.polygon[0].x + 5} y={zone.polygon[0].y + 32} className="fill-muted-foreground text-[8px]">{zone.type}</text>
+                  <text x={zone.polygon[0]?.x + 5} y={zone.polygon[0]?.y + 20} className="fill-foreground text-[10px] font-bold">{zone.name}</text>
+                  <text x={zone.polygon[0]?.x + 5} y={zone.polygon[0]?.y + 32} className="fill-muted-foreground text-[8px]">{zone.type}</text>
                 </g>
               );
             })}
@@ -239,37 +319,22 @@ export default function ZonesPage() {
             {/* Drawing preview */}
             {drawing && vertices.length > 0 && (
               <g>
-                {/* Lines between vertices */}
                 {vertices.map((v, i) => {
                   if (i === 0) return null;
                   const prev = vertices[i - 1];
                   return <line key={i} x1={prev.x} y1={prev.y} x2={v.x} y2={v.y} stroke="hsl(239,84%,67%)" strokeWidth="2" />;
                 })}
-
-                {/* Dashed preview line to mouse */}
-                {mousePos && vertices.length > 0 && (
+                {mousePos && (
                   <line
-                    x1={vertices[vertices.length - 1].x}
-                    y1={vertices[vertices.length - 1].y}
-                    x2={mousePos.x}
-                    y2={mousePos.y}
-                    stroke="hsl(239,84%,67%)"
-                    strokeWidth="1.5"
-                    strokeDasharray="6 4"
-                    opacity={0.6}
+                    x1={vertices[vertices.length - 1].x} y1={vertices[vertices.length - 1].y}
+                    x2={mousePos.x} y2={mousePos.y}
+                    stroke="hsl(239,84%,67%)" strokeWidth="1.5" strokeDasharray="6 4" opacity={0.6}
                   />
                 )}
-
-                {/* Vertex dots */}
                 {vertices.map((v, i) => (
-                  <circle
-                    key={i}
-                    cx={v.x}
-                    cy={v.y}
+                  <circle key={i} cx={v.x} cy={v.y}
                     r={i === 0 && vertices.length >= 3 ? 6 : 4}
-                    fill={i === 0 && vertices.length >= 3 ? 'hsl(239,84%,67%)' : 'hsl(239,84%,67%)'}
-                    stroke="white"
-                    strokeWidth="2"
+                    fill="hsl(239,84%,67%)" stroke="white" strokeWidth="2"
                     className={i === 0 && vertices.length >= 3 ? 'cursor-pointer' : ''}
                   />
                 ))}
@@ -281,17 +346,11 @@ export default function ZonesPage() {
         {/* Zone List */}
         <div className="w-96 space-y-4 overflow-y-auto">
           {drawing ? (
-            <button
-              onClick={cancelDrawing}
-              className="w-full py-3 bg-critical-red text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-critical-red/90 active:scale-95 transition-all"
-            >
+            <button onClick={cancelDrawing} className="w-full py-3 bg-critical-red text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-critical-red/90 active:scale-95 transition-all">
               <MI icon="close" /> Cancel Drawing
             </button>
           ) : (
-            <button
-              onClick={startDrawing}
-              className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-95 transition-all"
-            >
+            <button onClick={startDrawing} className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-95 transition-all">
               <MI icon="add" /> Add Zone
             </button>
           )}
@@ -321,10 +380,7 @@ export default function ZonesPage() {
                   <button className="text-xs text-primary font-semibold hover:underline flex items-center gap-1">
                     <MI icon="edit" className="text-sm" /> Edit
                   </button>
-                  <button
-                    onClick={() => setDeleteConfirm(zone.id)}
-                    className="text-xs text-critical-red font-semibold hover:underline flex items-center gap-1"
-                  >
+                  <button onClick={() => setDeleteConfirm(zone.id)} className="text-xs text-critical-red font-semibold hover:underline flex items-center gap-1">
                     <MI icon="delete" className="text-sm" /> Delete
                   </button>
                 </div>
@@ -336,11 +392,7 @@ export default function ZonesPage() {
 
       {/* Zone Configuration Modal */}
       <Dialog open={showModal} onOpenChange={(open) => {
-        if (!open) {
-          setShowModal(false);
-          setVertices([]);
-          resetModal();
-        }
+        if (!open) { setShowModal(false); setVertices([]); resetModal(); }
       }}>
         <DialogContent className="bg-card rounded-2xl border border-border shadow-xl max-w-md">
           <DialogHeader>
@@ -348,24 +400,15 @@ export default function ZonesPage() {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Zone Name */}
             <div>
               <label className="text-sm font-semibold text-foreground mb-1 block">Zone Name</label>
-              <Input
-                value={zoneName}
-                onChange={e => setZoneName(e.target.value)}
-                placeholder="e.g. West Wing Corridor"
-                className="rounded-xl"
-              />
+              <Input value={zoneName} onChange={e => setZoneName(e.target.value)} placeholder="e.g. West Wing Corridor" className="rounded-xl" />
             </div>
 
-            {/* Zone Type */}
             <div>
               <label className="text-sm font-semibold text-foreground mb-1 block">Zone Type</label>
               <Select value={zoneType} onValueChange={v => setZoneType(v as ZoneType)}>
-                <SelectTrigger className="rounded-xl">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="RESTRICTED">🚫 Restricted (No Entry)</SelectItem>
                   <SelectItem value="MAINTENANCE">🔧 Maintenance Zone</SelectItem>
@@ -375,15 +418,10 @@ export default function ZonesPage() {
               </Select>
             </div>
 
-            {/* Driving Rules */}
             <div className="bg-secondary/50 rounded-xl p-4">
               <p className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Driving Rules</p>
-              {zoneType === 'RESTRICTED' && (
-                <p className="text-sm text-foreground">Robots will be completely blocked from entering this zone.</p>
-              )}
-              {zoneType === 'MAINTENANCE' && (
-                <p className="text-sm text-foreground">Robots cannot enter — area under maintenance.</p>
-              )}
+              {zoneType === 'RESTRICTED' && <p className="text-sm text-foreground">Robots will be completely blocked from entering this zone.</p>}
+              {zoneType === 'MAINTENANCE' && <p className="text-sm text-foreground">Robots cannot enter — area under maintenance.</p>}
               {zoneType === 'CAUTION' && (
                 <div className="space-y-3">
                   <div>
@@ -410,24 +448,17 @@ export default function ZonesPage() {
               )}
             </div>
 
-            {/* Active toggle */}
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-foreground">Active</span>
-              <button
-                onClick={() => setZoneActive(!zoneActive)}
-                className={`w-12 h-6 rounded-full p-0.5 transition-colors ${zoneActive ? 'bg-emerald-500' : 'bg-secondary'}`}
-              >
+              <button onClick={() => setZoneActive(!zoneActive)} className={`w-12 h-6 rounded-full p-0.5 transition-colors ${zoneActive ? 'bg-emerald-500' : 'bg-secondary'}`}>
                 <div className={`w-5 h-5 bg-primary-foreground rounded-full shadow transition-transform ${zoneActive ? 'translate-x-6' : 'translate-x-0'}`} />
               </button>
             </div>
 
-            {/* Priority */}
             <div>
               <label className="text-sm font-semibold text-foreground mb-1 block">Priority</label>
               <Select value={priority} onValueChange={v => setPriority(v as 'LOW' | 'MEDIUM' | 'HIGH')}>
-                <SelectTrigger className="rounded-xl">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="rounded-xl"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="LOW">Low</SelectItem>
                   <SelectItem value="MEDIUM">Medium</SelectItem>
@@ -438,17 +469,10 @@ export default function ZonesPage() {
           </div>
 
           <DialogFooter className="gap-2 mt-2">
-            <button
-              onClick={() => { setShowModal(false); setVertices([]); resetModal(); }}
-              className="px-4 py-2 bg-secondary text-foreground rounded-xl font-semibold hover:bg-secondary/80 transition-all"
-            >
+            <button onClick={() => { setShowModal(false); setVertices([]); resetModal(); }} className="px-4 py-2 bg-secondary text-foreground rounded-xl font-semibold hover:bg-secondary/80 transition-all">
               Cancel
             </button>
-            <button
-              onClick={handleSaveZone}
-              disabled={!zoneName.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50"
-            >
+            <button onClick={handleSaveZone} disabled={!zoneName.trim() || vertices.length < 3} className="px-4 py-2 bg-primary text-primary-foreground rounded-xl font-bold hover:bg-primary/90 transition-all disabled:opacity-50">
               Save Zone
             </button>
           </DialogFooter>
@@ -469,12 +493,8 @@ export default function ZonesPage() {
               Are you sure you want to delete "{zones.find(z => z.id === deleteConfirm)?.name}"? This action cannot be undone.
             </p>
             <div className="flex gap-3">
-              <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2.5 bg-secondary text-foreground rounded-xl font-semibold hover:bg-secondary/80 transition-all">
-                Cancel
-              </button>
-              <button onClick={() => handleDeleteZone(deleteConfirm)} className="flex-1 py-2.5 bg-critical-red text-primary-foreground rounded-xl font-bold hover:bg-critical-red/90 active:scale-95 transition-all">
-                Delete
-              </button>
+              <button onClick={() => setDeleteConfirm(null)} className="flex-1 py-2.5 bg-secondary text-foreground rounded-xl font-semibold hover:bg-secondary/80 transition-all">Cancel</button>
+              <button onClick={() => handleDeleteZone(deleteConfirm)} className="flex-1 py-2.5 bg-critical-red text-primary-foreground rounded-xl font-bold hover:bg-critical-red/90 active:scale-95 transition-all">Delete</button>
             </div>
           </div>
         </div>
