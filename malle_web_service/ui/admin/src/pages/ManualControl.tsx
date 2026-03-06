@@ -4,6 +4,17 @@ import { useDashboard } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
 import PageHeader from '@/components/PageHeader';
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
+function toNumericId(id: string): number | null {
+  const n = parseInt(id.replace(/^R-/, ''), 10);
+  return isNaN(n) ? null : n;
+}
+
+function streamUrl(robotId: number) {
+  return `${API_BASE}/api/v1/robots/${robotId}/camera/stream`;
+}
+
 export default function ManualControlPage() {
   const { robots, teleopState, startTeleop, stopTeleop, addTeleopLog, triggerEStop, releaseEStop } = useDashboard();
   const location = useLocation();
@@ -11,6 +22,14 @@ export default function ManualControlPage() {
   const [selectedBotId, setSelectedBotId] = useState(navRobotId || teleopState.targetRobotId || robots[0]?.id || '');
   const selectedBot = robots.find(r => r.id === selectedBotId);
   const [moving, setMoving] = useState<string | null>(null);
+  const [camLoading, setCamLoading] = useState(true);
+  const [camError, setCamError] = useState(false);
+
+  // 로봇 변경 시 카메라 에러 리셋
+  useEffect(() => {
+    setCamError(false);
+    setCamLoading(true);
+  }, [selectedBotId]);
 
   const handleSelect = (id: string) => {
     setSelectedBotId(id);
@@ -95,11 +114,48 @@ export default function ManualControlPage() {
           </div>
 
           {/* Camera feed */}
-          <div className="flex-1 bg-foreground/90 rounded-3xl flex items-center justify-center relative overflow-hidden">
-              <div className="text-center">
-                <MI icon="videocam" className="text-muted-foreground/40 text-7xl" />
-                <p className="text-muted-foreground/40 text-sm mt-2">Camera Feed — Demo Mode</p>
+          <div className="flex-1 bg-black rounded-3xl relative overflow-hidden">
+            {toNumericId(selectedBotId) !== null && (
+              <img
+                key={selectedBotId}
+                src={streamUrl(toNumericId(selectedBotId)!)}
+                alt={`Robot ${selectedBotId} camera`}
+                className="w-full h-full object-contain"
+                onLoad={() => setCamLoading(false)}
+                onError={() => { setCamLoading(false); setCamError(true); }}
+              />
+            )}
+
+            {/* 오버레이: 로딩 */}
+            {camLoading && !camError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
+                <MI icon="videocam" className="text-muted-foreground/40 text-7xl animate-pulse" />
+                <p className="text-muted-foreground/60 text-sm">Waiting for camera stream…</p>
               </div>
+            )}
+
+            {/* 오버레이: 에러 */}
+            {camError && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80">
+                <MI icon="videocam_off" className="text-red-400/60 text-7xl" />
+                <p className="text-red-400/80 text-sm font-medium">Camera unavailable</p>
+                <p className="text-muted-foreground/40 text-xs">bridge_node offline or no frames received</p>
+                <button
+                  onClick={() => { setCamError(false); setCamLoading(true); }}
+                  className="mt-2 px-4 py-2 rounded-xl bg-card/80 text-foreground text-xs font-medium hover:bg-card transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* 좌하단: 로봇 ID 워터마크 */}
+            {!camError && !camLoading && (
+              <div className="absolute bottom-4 left-4 px-3 py-1 bg-black/50 rounded-lg text-white text-xs font-mono">
+                {selectedBotId}
+              </div>
+            )}
+
             {moving && (
               <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-bold animate-pulse">
                 MOVING: {moving}
