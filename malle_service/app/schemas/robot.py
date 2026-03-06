@@ -22,6 +22,7 @@ class RobotStateUpdateRequest(BaseModel):
     eta_sec: int | None = None
     speed_mps: float | None = None
     battery_pct: int | None = None
+    bridge_url: str | None = None  # bridge_node 자신의 HTTP URL (자동 등록용)
 
 
 class RobotCommandRequest(BaseModel):
