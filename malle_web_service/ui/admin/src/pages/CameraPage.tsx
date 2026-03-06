@@ -18,7 +18,7 @@ function streamUrl(robotId: number) {
 export default function CameraPage() {
   const { robots } = useDashboard();
   const [selectedRobotId, setSelectedRobotId] = useState<string>('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   // 첫 로봇 자동 선택
@@ -28,9 +28,8 @@ export default function CameraPage() {
     }
   }, [robots, selectedRobotId]);
 
-  // 로봇 변경 시 로딩 리셋
+  // 로봇 변경 시 에러 리셋
   useEffect(() => {
-    setLoading(true);
     setError(false);
   }, [selectedRobotId]);
 
