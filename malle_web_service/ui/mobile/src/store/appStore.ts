@@ -118,6 +118,8 @@ export interface POI {
   name: string;
   x: number;
   y: number;
+  map_x?: number | null;
+  map_y?: number | null;
   waitPoint: { x: number; y: number };
   category: string;
 }
@@ -249,9 +251,14 @@ function mapStore(s: StoreRes): Store {
     icon: catIcon[c] || 'store', open: true, closeTime: '9:00 PM' };
 }
 function mapPoi(p: PoiRes): POI {
-  return { id: p.id, name: p.name, x: p.x_m, y: p.y_m,
+  return { 
+    id: p.id, name: p.name, 
+    x: p.x_m, y: p.y_m,
+    map_x: p.map_x_m,
+    map_y: p.map_y_m,
     waitPoint: { x: p.wait_x_m ?? p.x_m - 2, y: p.wait_y_m ?? p.y_m - 2 },
-    category: p.type || 'OTHER' };
+    category: p.type || 'OTHER'
+  };
 }
 
 /* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
