@@ -46,10 +46,12 @@ TOPIC_CMD_VEL_TELEOP = _topic("cmd_vel_teleop")
 TOPIC_PREEMPT_TELEOP = _topic("preempt_teleop")
 TOPIC_TASK_COMMAND   = _topic("task_command")
 
-JPEG_QUALITY   = 70
-STREAM_MAX_FPS = 15
-CAMERA_WIDTH   = 640
-CAMERA_HEIGHT  = 480
+JPEG_QUALITY        = 70
+STREAM_MAX_FPS      = 15
+CAMERA_WIDTH        = 640
+CAMERA_HEIGHT       = 480
+CAMERA_PUSH_FPS     = 10   # malle_service로 push 하는 속도 (로컬 스트림은 STREAM_MAX_FPS 유지)
+CAMERA_PUSH_ENABLED = os.getenv("CAMERA_PUSH_ENABLED", "1") == "1"
 
 # ─────────────────────────────────────────────────────────────
 # ROS2 import
@@ -78,6 +80,7 @@ except ImportError:
 # FastAPI import
 # ─────────────────────────────────────────────────────────────
 try:
+    from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel
@@ -116,7 +119,38 @@ camera_buffer = CameraFrameBuffer()
 # ─────────────────────────────────────────────────────────────
 
 if HAS_FASTAPI:
-    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.4.0")
+    async def _push_frames_to_service():
+        """camera_buffer의 프레임을 malle_service에 주기적으로 HTTP POST."""
+        push_url = f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/camera/frame"
+        interval = 1.0 / CAMERA_PUSH_FPS
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(0.3)) as client:
+            while True:
+                frame = camera_buffer.get()
+                if frame:
+                    try:
+                        await client.post(
+                            push_url,
+                            content=frame,
+                            headers={"Content-Type": "image/jpeg"},
+                        )
+                    except (httpx.ConnectError, httpx.TimeoutException):
+                        pass
+                    except Exception as e:
+                        print(f"[bridge_node] camera push error: {e}")
+                await asyncio.sleep(interval)
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        task = None
+        if CAMERA_PUSH_ENABLED:
+            task = asyncio.create_task(_push_frames_to_service())
+            print(f"[bridge_node] camera push → {MALLE_SERVICE_URL}/robots/{ROBOT_ID}/camera/frame  @ {CAMERA_PUSH_FPS}fps")
+        yield
+        if task:
+            task.cancel()
+
+    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.4.0", lifespan=_lifespan)
 
     class CommandRequest(BaseModel):
         command: str = ""
