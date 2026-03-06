@@ -419,7 +419,7 @@ export function MapPage() {
             })}
 
             {/* ── 좌표 확인용 임시 마커 ── */}
-            {[
+            {/* {[
               { label: '(0.1,0.1)',    x: 0.1,    y: 0.1 },
               { label: '(2.5,2.0)', x: 2.5, y: 2.0 },
               { label: '(1.25,1.0)', x: 1.25, y: 1.0 },
@@ -434,7 +434,7 @@ export function MapPage() {
                   {label}
                 </span>
               </div>
-            ))}
+            ))} */}
           </div>
         </div>
       </div>
