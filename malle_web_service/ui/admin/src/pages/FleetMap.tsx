@@ -4,6 +4,31 @@ import { useDashboard } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
 import PageHeader from '@/components/PageHeader';
 
+// ── 좌표 변환: map_x_m/map_y_m (미터) → SVG 픽셀 (viewBox 0 0 450 380) ──────
+const SVG_W = 450;
+const SVG_H = 380;
+const MAP_DB_MIN_X = 0.1;
+const MAP_DB_MIN_Y = 0.1;
+const MAP_WIDTH_M  = 2.5;
+const MAP_HEIGHT_M = 2.0;
+// Mobile/Robot MapPage와 동일한 오프셋 (이미지 흰색 영역 기준)
+const MAP_OFFSET = { left: 3.8462, top: 4.6512, right: 96.0385, bottom: 95.1163 };
+
+function toSvgCoord(x_m: number, y_m: number): { x: number; y: number } {
+  const innerW = (MAP_OFFSET.right  - MAP_OFFSET.left) / 100 * SVG_W;
+  const innerH = (MAP_OFFSET.bottom - MAP_OFFSET.top)  / 100 * SVG_H;
+  const offsetX = MAP_OFFSET.left / 100 * SVG_W;
+  const offsetY = MAP_OFFSET.top  / 100 * SVG_H;
+
+  const ratioX = (x_m - MAP_DB_MIN_X) / (MAP_WIDTH_M  - MAP_DB_MIN_X);
+  const ratioY = (y_m - MAP_DB_MIN_Y) / (MAP_HEIGHT_M - MAP_DB_MIN_Y);
+
+  return {
+    x: offsetX + ratioX * innerW,
+    y: offsetY + (1 - ratioY) * innerH,  // y축 반전
+  };
+}
+
 const statusDot: Record<string, string> = {
   MOVING: 'bg-emerald-500',
   WAITING: 'bg-muted-foreground',
@@ -53,7 +78,7 @@ function getConfirmMessage(action: PendingAction): string {
 }
 
 export default function FleetMapPage() {
-  const { robots, zones, selectedRobotId, selectRobot, triggerEStop, releaseEStop, startTeleop, sendToMaintenance, returnToStation } = useDashboard();
+  const { robots, zones, pois, selectedRobotId, selectRobot, triggerEStop, releaseEStop, startTeleop, sendToMaintenance, returnToStation } = useDashboard();
   const navigate = useNavigate();
   const [layers, setLayers] = useState({ robots: true, routes: true, zones: true, destinations: true });
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
@@ -76,20 +101,13 @@ export default function FleetMapPage() {
     e.preventDefault();
     const rect = mapContainerRef.current?.getBoundingClientRect();
     if (!rect) return;
-
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-
     setTransform(prev => {
       const delta = e.deltaY > 0 ? 0.85 : 1.15;
       const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * delta));
       const scaleRatio = newScale / prev.scale;
-
-      // Zoom toward cursor
-      const newX = mouseX - scaleRatio * (mouseX - prev.x);
-      const newY = mouseY - scaleRatio * (mouseY - prev.y);
-
-      return clampTransform(newX, newY, newScale);
+      return clampTransform(mouseX - scaleRatio * (mouseX - prev.x), mouseY - scaleRatio * (mouseY - prev.y), newScale);
     });
   }, [clampTransform]);
 
@@ -101,7 +119,6 @@ export default function FleetMapPage() {
   }, [handleWheel]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Only pan on left click, not on robot markers
     if ((e.target as Element).closest('[data-robot]')) return;
     isPanning.current = true;
     lastPan.current = { x: e.clientX, y: e.clientY };
@@ -127,7 +144,6 @@ export default function FleetMapPage() {
   };
 
   const resetZoom = () => setTransform({ x: 0, y: 0, scale: 1 });
-
   const toggleLayer = (key: keyof typeof layers) => setLayers(prev => ({ ...prev, [key]: !prev[key] }));
 
   const executeAction = () => {
@@ -144,10 +160,9 @@ export default function FleetMapPage() {
     <div className="h-[calc(100vh-4rem)] flex flex-col">
       <PageHeader title="Fleet Map" subtitle="Real-time fleet monitoring" />
 
-      {/* Main content: map + detail panel side-by-side */}
       <div className="flex gap-0 flex-1 -mx-8 min-h-0 overflow-hidden">
 
-        {/* Left: Map + Cards stacked vertically */}
+        {/* Left: Map + Cards */}
         <div className="flex-1 flex flex-col min-h-0">
 
           {/* Map Area */}
@@ -179,15 +194,11 @@ export default function FleetMapPage() {
               <button
                 onClick={() => setTransform(prev => clampTransform(prev.x, prev.y, prev.scale * 1.25))}
                 className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors text-sm font-bold"
-              >
-                +
-              </button>
+              >+</button>
               <button
                 onClick={() => setTransform(prev => clampTransform(prev.x, prev.y, prev.scale * 0.8))}
                 className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors text-sm font-bold"
-              >
-                −
-              </button>
+              >−</button>
               <button
                 onClick={resetZoom}
                 className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors"
@@ -202,7 +213,7 @@ export default function FleetMapPage() {
               {Math.round(transform.scale * 100)}%
             </div>
 
-            {/* Zoomable/pannable SVG layer */}
+            {/* Zoomable/pannable layer */}
             <div
               className="absolute inset-0"
               style={{
@@ -211,14 +222,20 @@ export default function FleetMapPage() {
                 willChange: 'transform',
               }}
             >
-              <svg className="w-full h-full" viewBox="0 0 450 380" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', width: '100%', height: '100%' }}>
-                <defs>
-                  <pattern id="dotGrid" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-                    <circle cx="1" cy="1" r="1" className="fill-muted-foreground/20" />
-                  </pattern>
-                </defs>
-
-                <image href="/map_end_end.png" x="0" y="0" width="450" height="380" preserveAspectRatio="xMidYMid meet" opacity="0.85" />
+              <svg
+                className="w-full h-full"
+                viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+                preserveAspectRatio="xMidYMid meet"
+                style={{ display: 'block', width: '100%', height: '100%' }}
+              >
+                {/* 맵 이미지 */}
+                <image
+                  href="/map_end_end.png"
+                  x="0" y="0"
+                  width={SVG_W} height={SVG_H}
+                  preserveAspectRatio="xMidYMid meet"
+                  opacity="0.85"
+                />
 
                 {/* Zones */}
                 {layers.zones && zones.map(zone => {
@@ -240,27 +257,63 @@ export default function FleetMapPage() {
                   );
                 })}
 
-                {/* Routes */}
-                {layers.routes && robots.filter(r => r.currentTarget).map(robot => (
-                  <line
-                    key={`route-${robot.id}`}
-                    x1={robot.position.x}
-                    y1={robot.position.y}
-                    x2={robot.position.x + 50}
-                    y2={robot.position.y - 30}
-                    stroke="hsl(239,84%,67%)"
-                    strokeWidth="1.5"
-                    strokeDasharray="4 4"
-                    opacity="0.5"
-                  />
-                ))}
+                {/* Routes: 운행 중인 로봇 → 목적지 POI 점선 */}
+                {layers.routes && robots.filter(r => r.currentTarget && r.status === 'MOVING').map(robot => {
+                  const targetPoi = pois.find(p => p.name === robot.currentTarget);
+                  if (!targetPoi) return null;
+                  const from = toSvgCoord(robot.position.x, robot.position.y);
+                  const to   = toSvgCoord(
+                    targetPoi.map_x_m ?? targetPoi.x_m,
+                    targetPoi.map_y_m ?? targetPoi.y_m,
+                  );
+                  return (
+                    <line
+                      key={`route-${robot.id}`}
+                      x1={from.x} y1={from.y}
+                      x2={to.x}   y2={to.y}
+                      stroke="hsl(239,84%,67%)"
+                      strokeWidth="1.5"
+                      strokeDasharray="4 4"
+                      opacity="0.6"
+                    />
+                  );
+                })}
 
-                {/* Robot markers */}
+                {/* POI Destinations — 실제 서버 데이터, map_x_m 기준 */}
+                {layers.destinations && pois.map(poi => {
+                  const { x, y } = toSvgCoord(
+                    poi.map_x_m ?? poi.x_m,
+                    poi.map_y_m ?? poi.y_m,
+                  );
+                  return (
+                    <g key={poi.id}>
+                      <rect
+                        x={x - 4} y={y - 4}
+                        width="8" height="8"
+                        rx="2"
+                        fill="hsl(var(--primary))"
+                        opacity="0.85"
+                      />
+                      <text
+                        x={x + 7} y={y + 3}
+                        fontSize="7"
+                        fill="#808080"
+                        // className="fill-foreground"
+                        style={{ fontWeight: 600 }}
+                      >
+                        {poi.name}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Robot markers — toSvgCoord로 미터 → SVG 변환 */}
                 {layers.robots && robots.map(robot => {
                   const isSelected = robot.id === selectedRobotId;
-                  const fill = robot.status === 'E_STOP' ? '#ef4444'
+                  const { x, y } = toSvgCoord(robot.position.x, robot.position.y);
+                  const fill = robot.status === 'E_STOP'       ? '#ef4444'
                     : robot.status === 'HEADING_MAINTENANCE' || robot.status === 'HEADING_STATION' ? '#f59e0b'
-                    : robot.status === 'MOVING' ? '#3b82f6'
+                    : robot.status === 'MOVING'   ? '#3b82f6'
                     : robot.status === 'CHARGING' ? '#6366f1'
                     : '#94a3b8';
                   return (
@@ -273,35 +326,29 @@ export default function FleetMapPage() {
                         selectRobot(robot.id === selectedRobotId ? null : robot.id);
                       }}
                     >
-                      {isSelected && <circle cx={robot.position.x} cy={robot.position.y} r="18" fill="none" stroke={fill} strokeWidth="2" opacity="0.4">
-                        <animate attributeName="r" from="14" to="22" dur="1.5s" repeatCount="indefinite" />
-                        <animate attributeName="opacity" from="0.4" to="0" dur="1.5s" repeatCount="indefinite" />
-                      </circle>}
-                      {robot.status === 'E_STOP' && <circle cx={robot.position.x} cy={robot.position.y} r="14" fill={fill} opacity="0.2">
-                        <animate attributeName="opacity" from="0.3" to="0" dur="1s" repeatCount="indefinite" />
-                      </circle>}
-                      <circle cx={robot.position.x} cy={robot.position.y} r="8" fill={fill} stroke="white" strokeWidth="2" />
-                      <text x={robot.position.x} y={robot.position.y - 14} textAnchor="middle" className="fill-foreground text-[8px] font-bold">{robot.id}</text>
+                      {isSelected && (
+                        <circle cx={x} cy={y} r="18" fill="none" stroke={fill} strokeWidth="2" opacity="0.4">
+                          <animate attributeName="r" from="14" to="22" dur="1.5s" repeatCount="indefinite" />
+                          <animate attributeName="opacity" from="0.4" to="0" dur="1.5s" repeatCount="indefinite" />
+                        </circle>
+                      )}
+                      {robot.status === 'E_STOP' && (
+                        <circle cx={x} cy={y} r="14" fill={fill} opacity="0.2">
+                          <animate attributeName="opacity" from="0.3" to="0" dur="1s" repeatCount="indefinite" />
+                        </circle>
+                      )}
+                      <circle cx={x} cy={y} r="8" fill={fill} stroke="white" strokeWidth="2" />
+                      <text x={x} y={y - 14} textAnchor="middle" fontSize="8" fontWeight="bold" className="fill-foreground">
+                        {robot.id}
+                      </text>
                     </g>
                   );
                 })}
-
-                {/* Destinations */}
-                {layers.destinations && (
-                  <>
-                    {[{ name: 'Zara Store', x: 170, y: 50 }, { name: 'Nike', x: 80, y: 190 }, { name: 'Apple Store', x: 340, y: 100 }, { name: 'Starbucks', x: 200, y: 260 }].map(poi => (
-                      <g key={poi.name}>
-                        <rect x={poi.x - 3} y={poi.y - 3} width="6" height="6" rx="1" className="fill-primary" />
-                        <text x={poi.x + 8} y={poi.y + 3} className="fill-muted-foreground text-[7px]">{poi.name}</text>
-                      </g>
-                    ))}
-                  </>
-                )}
               </svg>
             </div>
           </div>
 
-          {/* Robot Cards — below map */}
+          {/* Robot Cards */}
           <div className="border-t border-border bg-card/50 shrink-0">
             <div className="flex gap-3 overflow-x-auto px-4 py-3">
               {robots.map(robot => (
@@ -353,7 +400,6 @@ export default function FleetMapPage() {
               </button>
             </div>
 
-            {/* Session info */}
             <div className="bg-secondary/50 rounded-2xl p-4 mb-4">
               <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Current Mission</p>
               {selectedRobot.currentTarget ? (
@@ -368,7 +414,6 @@ export default function FleetMapPage() {
               )}
             </div>
 
-            {/* Stats */}
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div className="bg-secondary/50 rounded-xl p-3">
                 <p className="text-xs text-muted-foreground">Battery</p>
@@ -388,7 +433,6 @@ export default function FleetMapPage() {
               </div>
             </div>
 
-            {/* Warnings */}
             {(selectedRobot.battery < 20 || selectedRobot.commsStatus !== 'STRONG' || selectedRobot.eStopActive) && (
               <div className="space-y-2 mb-4">
                 {selectedRobot.battery < 20 && (
@@ -406,13 +450,11 @@ export default function FleetMapPage() {
               </div>
             )}
 
-            {/* E-Stop status */}
             <div className={`p-3 rounded-xl mb-4 flex items-center gap-2 ${selectedRobot.eStopActive ? 'bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30' : 'bg-emerald-50 dark:bg-emerald-900/10 border border-emerald-200 dark:border-emerald-900/30'}`}>
               <MI icon={selectedRobot.eStopActive ? 'pan_tool' : 'check_circle'} className={selectedRobot.eStopActive ? 'text-critical-red' : 'text-emerald-500'} />
               <span className="text-sm font-bold text-foreground">E-Stop: {selectedRobot.eStopActive ? `ON (${selectedRobot.eStopSource})` : 'OFF'}</span>
             </div>
 
-            {/* Action Buttons */}
             <div className="space-y-3">
               {selectedRobot.eStopActive ? (
                 <button
@@ -430,10 +472,7 @@ export default function FleetMapPage() {
                 </button>
               )}
               <button
-                onClick={() => {
-                  startTeleop(selectedRobot.id);
-                  navigate('/manual-control');
-                }}
+                onClick={() => { startTeleop(selectedRobot.id); navigate('/manual-control'); }}
                 className="w-full py-3 bg-primary text-primary-foreground rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-95 transition-all"
               >
                 <MI icon="settings_remote" /> Take Manual Control
@@ -474,16 +513,10 @@ export default function FleetMapPage() {
             <h3 className="text-lg font-bold text-foreground text-center mb-2">{confirmConfig[pendingAction.type].label}</h3>
             <p className="text-sm text-muted-foreground text-center mb-6">{getConfirmMessage(pendingAction)}</p>
             <div className="flex gap-3">
-              <button
-                onClick={() => setPendingAction(null)}
-                className="flex-1 py-2.5 bg-secondary text-foreground rounded-xl font-bold hover:bg-secondary/80 transition-all"
-              >
+              <button onClick={() => setPendingAction(null)} className="flex-1 py-2.5 bg-secondary text-foreground rounded-xl font-bold hover:bg-secondary/80 transition-all">
                 Cancel
               </button>
-              <button
-                onClick={executeAction}
-                className={`flex-1 py-2.5 rounded-xl font-bold active:scale-95 transition-all ${confirmConfig[pendingAction.type].confirmClass}`}
-              >
+              <button onClick={executeAction} className={`flex-1 py-2.5 rounded-xl font-bold active:scale-95 transition-all ${confirmConfig[pendingAction.type].confirmClass}`}>
                 Confirm
               </button>
             </div>
