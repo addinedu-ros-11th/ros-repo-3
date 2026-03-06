@@ -122,23 +122,30 @@ if HAS_FASTAPI:
     async def _push_frames_to_service():
         """camera_buffer의 프레임을 malle_service에 주기적으로 HTTP POST."""
         push_url = f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/camera/frame"
-        interval = 1.0 / CAMERA_PUSH_FPS
+        active_interval = 1.0 / CAMERA_PUSH_FPS
+        idle_interval = 2.0
 
         async with httpx.AsyncClient(timeout=httpx.Timeout(0.3)) as client:
+            has_viewers = False
             while True:
                 frame = camera_buffer.get()
-                if frame:
-                    try:
-                        await client.post(
+                try:
+                    if frame and has_viewers:
+                        resp = await client.post(
                             push_url,
                             content=frame,
                             headers={"Content-Type": "image/jpeg"},
                         )
-                    except (httpx.ConnectError, httpx.TimeoutException):
-                        pass
-                    except Exception as e:
-                        print(f"[bridge_node] camera push error: {e}")
-                await asyncio.sleep(interval)
+                    else:
+                        resp = await client.post(push_url, content=b"")
+                    data = resp.json()
+                    has_viewers = data.get("viewers", 0) > 0
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    pass
+                except Exception as e:
+                    print(f"[bridge_node] camera push error: {e}")
+
+                await asyncio.sleep(active_interval if has_viewers else idle_interval)
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -373,7 +380,7 @@ if HAS_ROS2:
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
 
-            self._cmd_vel_pub = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
+            self._cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
             self._preempt_pub = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
             self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
@@ -407,8 +414,7 @@ if HAS_ROS2:
             if not HAS_CV2:
                 return
             frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             camera_buffer.put(buf.tobytes())
 
         def _push_state(self):
