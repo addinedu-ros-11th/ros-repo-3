@@ -493,6 +493,8 @@ class NavCore:
             self._node.get_logger().error('[NavCore] 액션 서버 없음')
             return False
 
+        self._nav_mode = 'NAV2'
+
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
 
@@ -501,15 +503,18 @@ class NavCore:
         deadline = time.time() + 10.0
         while not send_future.done():
             if self._nav_abort:
+                self._nav_mode = 'IDLE'
                 return False
             if time.time() > deadline:
                 self._node.get_logger().error('[NavCore] goal 전송 타임아웃')
+                self._nav_mode = 'IDLE'
                 return False
             time.sleep(0.05)
 
         goal_handle = send_future.result()
         if not goal_handle.accepted:
             self._node.get_logger().warn('[NavCore] goal 거절됨')
+            self._nav_mode = 'IDLE'
             return False
 
         self._current_goal_handle = goal_handle
@@ -518,10 +523,12 @@ class NavCore:
         while not result_future.done():
             if self._nav_abort:
                 goal_handle.cancel_goal_async()
+                self._nav_mode = 'IDLE'
                 return False
             time.sleep(0.1)
 
         self._current_goal_handle = None
+        self._nav_mode = 'IDLE'
         return result_future.result().status == 4
 
     # ── 웨이포인트 유틸 ──────────────────────────────────────
@@ -673,8 +680,8 @@ class NavCore:
     # ── AprilTag pose 교정 ────────────────────────────────────
 
     def _tag_image_cb(self, msg):
-        """Nav2 이동 중에만 최신 gray 프레임을 버퍼에 저장."""
-        if self._nav_mode != 'NAV2' or self._tag_detector is None:
+        """최신 gray 프레임을 버퍼에 저장."""
+        if self._tag_detector is None:
             return
         import numpy as np
         frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
@@ -683,8 +690,8 @@ class NavCore:
             self._tag_frame = gray
 
     def _tag_correction_tick(self):
-        """2Hz 타이머 — Nav2 이동 중일 때만 AprilTag 검출 후 yaw 교정 시도."""
-        if self._nav_mode != 'NAV2' or self._tag_detector is None:
+        """0.5s 타이머 — AprilTag 검출 후 yaw 교정 시도."""
+        if self._tag_detector is None:
             return
         with self._tag_frame_lock:
             gray = self._tag_frame

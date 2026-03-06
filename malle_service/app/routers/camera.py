@@ -17,6 +17,7 @@ class _FrameStore:
 
     def __init__(self):
         self._frames: dict[int, bytes] = {}
+        self._viewers: dict[int, int] = {}  # robot_id → 활성 스트림 뷰어 수
         # asyncio.Lock은 이벤트루프 종속 → get_or_create 패턴 사용
         self._lock: Optional[asyncio.Lock] = None
 
@@ -36,20 +37,27 @@ class _FrameStore:
     def robots_with_frames(self) -> list[int]:
         return list(self._frames.keys())
 
+    def add_viewer(self, robot_id: int) -> None:
+        self._viewers[robot_id] = self._viewers.get(robot_id, 0) + 1
+
+    def remove_viewer(self, robot_id: int) -> None:
+        self._viewers[robot_id] = max(0, self._viewers.get(robot_id, 0) - 1)
+
+    def viewer_count(self, robot_id: int) -> int:
+        return self._viewers.get(robot_id, 0)
+
 
 frame_store = _FrameStore()
 
 @router.post("/robots/{robot_id}/camera/frame")
 async def receive_frame(robot_id: int, request: Request):
-    """bridge_node가 JPEG 바이너리를 직접 POST 하는 엔드포인트.
-
-    UDP 모드로 전환 시 이 라우트 대신 malle_service lifespan에서 UDP
-    리스너 태스크를 시작하고 frame_store.put() 을 호출하면 됩니다.
-    """
-    body = await request.body()
-    if body:
-        await frame_store.put(robot_id, body)
-    return {"ok": True}
+    """bridge_node가 JPEG 바이너리를 직접 POST 하는 엔드포인트."""
+    viewers = frame_store.viewer_count(robot_id)
+    if viewers > 0:
+        body = await request.body()
+        if body:
+            await frame_store.put(robot_id, body)
+    return {"ok": True, "viewers": viewers}
 
 
 NO_FRAME_TIMEOUT = 10.0
@@ -61,29 +69,33 @@ async def _mjpeg_gen(robot_id: int):
     loop = asyncio.get_event_loop()
     no_frame_since = loop.time()
 
-    while True:
-        t0 = loop.time()
-        frame = await frame_store.get(robot_id)
+    frame_store.add_viewer(robot_id)
+    try:
+        while True:
+            t0 = loop.time()
+            frame = await frame_store.get(robot_id)
 
-        if frame is None:
-            if loop.time() - no_frame_since > NO_FRAME_TIMEOUT:
-                return
-            await asyncio.sleep(0.5)
-            continue
+            if frame is None:
+                if loop.time() - no_frame_since > NO_FRAME_TIMEOUT:
+                    return
+                await asyncio.sleep(0.5)
+                continue
 
-        no_frame_since = loop.time()
+            no_frame_since = loop.time()
 
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n"
-            + frame
-            + b"\r\n"
-        )
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + frame
+                + b"\r\n"
+            )
 
-        elapsed = loop.time() - t0
-        wait = min_interval - elapsed
-        if wait > 0:
-            await asyncio.sleep(wait)
+            elapsed = loop.time() - t0
+            wait = min_interval - elapsed
+            if wait > 0:
+                await asyncio.sleep(wait)
+    finally:
+        frame_store.remove_viewer(robot_id)
 
 
 @router.get("/robots/{robot_id}/camera/stream")

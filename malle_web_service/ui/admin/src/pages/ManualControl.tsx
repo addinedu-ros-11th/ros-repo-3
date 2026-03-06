@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useDashboard } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
@@ -15,20 +15,28 @@ function streamUrl(robotId: number) {
   return `${API_BASE}/api/v1/robots/${robotId}/camera/stream`;
 }
 
+const DIR_VELOCITIES: Record<string, { linear_x: number; angular_z: number }> = {
+  FWD:   { linear_x: 0.3,  angular_z:  0.0 },
+  BWD:   { linear_x: -0.3, angular_z:  0.0 },
+  LEFT:  { linear_x: 0.0,  angular_z:  0.5 },
+  RIGHT: { linear_x: 0.0,  angular_z: -0.5 },
+};
+
 export default function ManualControlPage() {
-  const { robots, teleopState, startTeleop, stopTeleop, addTeleopLog, triggerEStop, releaseEStop } = useDashboard();
+  const { robots, teleopState, startTeleop, stopTeleop, addTeleopLog, sendTeleopCmd, triggerEStop, releaseEStop } = useDashboard();
   const location = useLocation();
   const navRobotId = (location.state as { robotId?: string })?.robotId;
   const [selectedBotId, setSelectedBotId] = useState(navRobotId || teleopState.targetRobotId || robots[0]?.id || '');
   const selectedBot = robots.find(r => r.id === selectedBotId);
   const [moving, setMoving] = useState<string | null>(null);
-  const [camLoading, setCamLoading] = useState(true);
+  const [camLoading, setCamLoading] = useState(false);
   const [camError, setCamError] = useState(false);
+  const cmdIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 로봇 변경 시 카메라 에러 리셋
   useEffect(() => {
     setCamError(false);
-    setCamLoading(true);
+    setCamLoading(false);
   }, [selectedBotId]);
 
   const handleSelect = (id: string) => {
@@ -51,21 +59,37 @@ export default function ManualControlPage() {
     if (isDown) {
       setMoving(dir);
       addTeleopLog(`MOVE_${dir.toUpperCase()}`);
+      if (cmdIntervalRef.current) clearInterval(cmdIntervalRef.current);
+      const vel = DIR_VELOCITIES[dir];
+      const targetId = teleopState.targetRobotId || selectedBotId;
+      sendTeleopCmd(targetId, vel.linear_x, vel.angular_z);
+      cmdIntervalRef.current = setInterval(() => {
+        sendTeleopCmd(targetId, vel.linear_x, vel.angular_z);
+      }, 100);
     } else {
       setMoving(null);
-      addTeleopLog('STOP');
+      if (cmdIntervalRef.current) { clearInterval(cmdIntervalRef.current); cmdIntervalRef.current = null; }
+      sendTeleopCmd(teleopState.targetRobotId || selectedBotId, 0.0, 0.0);
     }
-  }, [teleopState.active, addTeleopLog]);
+  }, [teleopState.active, teleopState.targetRobotId, selectedBotId, addTeleopLog, sendTeleopCmd]);
 
-  const handleStop = () => {
+  const handleStop = useCallback(() => {
     setMoving(null);
+    if (cmdIntervalRef.current) { clearInterval(cmdIntervalRef.current); cmdIntervalRef.current = null; }
     addTeleopLog('STOP');
-  };
+    sendTeleopCmd(teleopState.targetRobotId || selectedBotId, 0.0, 0.0);
+  }, [teleopState.targetRobotId, selectedBotId, addTeleopLog, sendTeleopCmd]);
+
+  // 언마운트 시 interval 정리
+  useEffect(() => {
+    return () => { if (cmdIntervalRef.current) clearInterval(cmdIntervalRef.current); };
+  }, []);
 
   // Keyboard support
   useEffect(() => {
     const keyMap: Record<string, string> = { ArrowUp: 'FWD', ArrowDown: 'BWD', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT' };
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
       if (keyMap[e.key]) { e.preventDefault(); handleDirection(keyMap[e.key], true); }
       if (e.key === ' ') { e.preventDefault(); handleStop(); }
     };
@@ -75,7 +99,7 @@ export default function ManualControlPage() {
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [handleDirection]);
+  }, [handleDirection, handleStop]);
 
   const handleEStop = () => {
     if (selectedBot) {
@@ -164,14 +188,14 @@ export default function ManualControlPage() {
 
             {/* D-pad controls */}
             {teleopState.active && (
-              <div className={`absolute bottom-8 left-1/2 -translate-x-1/2 grid grid-cols-3 gap-2 w-56 place-items-center transition-opacity duration-200 ${
-                teleopState.active ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-              }`}>
+              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 grid grid-cols-3 gap-2 w-56 place-items-center">
                 <div />
                 <button
                   onMouseDown={() => handleDirection('FWD', true)}
                   onMouseUp={() => handleDirection('FWD', false)}
-                  onMouseLeave={() => moving === 'FWD' && handleDirection('FWD', false)}
+                  onMouseLeave={() => handleDirection('FWD', false)}
+                  onTouchStart={(e) => { e.preventDefault(); handleDirection('FWD', true); }}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDirection('FWD', false); }}
                   className={`w-16 h-16 rounded-2xl shadow-lg flex items-center justify-center transition-all ${
                     moving === 'FWD' ? 'bg-primary text-primary-foreground scale-90' : 'bg-card/90 backdrop-blur text-foreground active:scale-90'
                   }`}
@@ -183,7 +207,9 @@ export default function ManualControlPage() {
                 <button
                   onMouseDown={() => handleDirection('LEFT', true)}
                   onMouseUp={() => handleDirection('LEFT', false)}
-                  onMouseLeave={() => moving === 'LEFT' && handleDirection('LEFT', false)}
+                  onMouseLeave={() => handleDirection('LEFT', false)}
+                  onTouchStart={(e) => { e.preventDefault(); handleDirection('LEFT', true); }}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDirection('LEFT', false); }}
                   className={`w-16 h-16 rounded-2xl shadow-lg flex items-center justify-center transition-all ${
                     moving === 'LEFT' ? 'bg-primary text-primary-foreground scale-90' : 'bg-card/90 backdrop-blur text-foreground active:scale-90'
                   }`}
@@ -191,7 +217,8 @@ export default function ManualControlPage() {
                   <MI icon="arrow_back" className="text-2xl" />
                 </button>
                 <button
-                  onClick={handleStop}
+                  onMouseDown={handleStop}
+                  onTouchStart={(e) => { e.preventDefault(); handleStop(); }}
                   className="w-16 h-16 bg-critical-red text-primary-foreground rounded-2xl shadow-lg flex items-center justify-center active:scale-90 transition-all"
                 >
                   <MI icon="stop" className="text-2xl" />
@@ -199,7 +226,9 @@ export default function ManualControlPage() {
                 <button
                   onMouseDown={() => handleDirection('RIGHT', true)}
                   onMouseUp={() => handleDirection('RIGHT', false)}
-                  onMouseLeave={() => moving === 'RIGHT' && handleDirection('RIGHT', false)}
+                  onMouseLeave={() => handleDirection('RIGHT', false)}
+                  onTouchStart={(e) => { e.preventDefault(); handleDirection('RIGHT', true); }}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDirection('RIGHT', false); }}
                   className={`w-16 h-16 rounded-2xl shadow-lg flex items-center justify-center transition-all ${
                     moving === 'RIGHT' ? 'bg-primary text-primary-foreground scale-90' : 'bg-card/90 backdrop-blur text-foreground active:scale-90'
                   }`}
@@ -211,7 +240,9 @@ export default function ManualControlPage() {
                 <button
                   onMouseDown={() => handleDirection('BWD', true)}
                   onMouseUp={() => handleDirection('BWD', false)}
-                  onMouseLeave={() => moving === 'BWD' && handleDirection('BWD', false)}
+                  onMouseLeave={() => handleDirection('BWD', false)}
+                  onTouchStart={(e) => { e.preventDefault(); handleDirection('BWD', true); }}
+                  onTouchEnd={(e) => { e.preventDefault(); handleDirection('BWD', false); }}
                   className={`w-16 h-16 rounded-2xl shadow-lg flex items-center justify-center transition-all ${
                     moving === 'BWD' ? 'bg-primary text-primary-foreground scale-90' : 'bg-card/90 backdrop-blur text-foreground active:scale-90'
                   }`}
