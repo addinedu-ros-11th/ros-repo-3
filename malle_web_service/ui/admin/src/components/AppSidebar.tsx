@@ -10,7 +10,6 @@ const navItems = [
   { label: 'Missions', icon: 'assignment', path: '/missions' },
   { label: 'Analytics', icon: 'bar_chart', path: '/analytics' },
   { label: 'Events', icon: 'notifications_active', path: '/events' },
-  { label: 'Camera', icon: 'videocam', path: '/camera' },
 ];
 
 export default function AppSidebar() {
