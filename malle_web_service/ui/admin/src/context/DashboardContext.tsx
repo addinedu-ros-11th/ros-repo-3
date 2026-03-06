@@ -591,6 +591,7 @@ interface DashboardContextValue extends DashboardState {
   startTeleop: (robotId: string) => void;
   stopTeleop: () => void;
   addTeleopLog: (action: string) => void;
+  sendTeleopCmd: (robotId: string, linear_x: number, angular_z: number) => void;
   dismissEmergency: () => void;
   sendToMaintenance: (robotId: string) => void;
   returnToStation: (robotId: string) => void;
@@ -767,7 +768,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /* ───── ★ WS 핸들러 콜백 연결 ───── */
-  useWsHandler({
+  const { send: wsSend } = useWsHandler({
     onRobotStateUpdated: useCallback((robotId: number, state: Record<string, any>) => {
       const rid = `R-${robotId}`;
       // payload shape: { robot_id, battery_pct, state: { x_m, y_m, motion_state, nav_state, stop_state, eta_sec, ... } }
@@ -1009,6 +1010,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     setTeleopState(prev => ({ ...prev, log: [...prev.log, { timestamp: new Date().toLocaleTimeString(), action }] }));
   }, []);
 
+  const sendTeleopCmd = useCallback((robotId: string, linear_x: number, angular_z: number) => {
+    const numId = parseInt(robotId.replace('R-', ''));
+    if (isNaN(numId)) return;
+    wsSend('TELEOP_CMD', { robot_id: numId, linear_x, angular_z });
+  }, [wsSend]);
+
   const dismissEmergency = useCallback(() => setEmergencyDismissed(true), []);
 
   const sendToMaintenance = useCallback((robotId: string) => {
@@ -1030,7 +1037,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       robots, missions, zones, events, emergencyBanner, teleopState, selectedRobotId, darkMode,
       expandedMissionId, expandedAlertId,
       selectRobot, toggleDarkMode, triggerEStop, releaseEStop, stopMission, restartMission,
-      toggleZone, addZone, deleteZone, startTeleop, stopTeleop, addTeleopLog, dismissEmergency, sendToMaintenance, returnToStation,
+      toggleZone, addZone, deleteZone, startTeleop, stopTeleop, addTeleopLog, sendTeleopCmd, dismissEmergency, sendToMaintenance, returnToStation,
       setExpandedMissionId, setExpandedAlertId,
     }}>
       {children}
