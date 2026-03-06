@@ -12,6 +12,7 @@ import Zones from "./pages/Zones";
 import Missions from "./pages/Missions";
 import Analytics from "./pages/Analytics";
 import Events from "./pages/Events";
+import CameraPage from "./pages/CameraPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -32,6 +33,7 @@ const App = () => (
               <Route path="/missions" element={<Missions />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/events" element={<Events />} />
+              <Route path="/camera" element={<CameraPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

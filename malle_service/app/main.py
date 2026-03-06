@@ -12,7 +12,7 @@ from app.config import CORS_ORIGINS
 from app.database import engine, Base
 from app.models import *  # noqa: F401,F403  — register all models
 
-from app.routers import sessions, robots, guide, pickup, lockbox, missions, zones, events, pois, stores, shopping, teleop
+from app.routers import sessions, robots, guide, pickup, lockbox, missions, zones, events, pois, stores, shopping, teleop, camera
 from app.ws.manager import ws_router
 
 
@@ -59,6 +59,7 @@ app.include_router(pois.router, prefix="/api/v1", tags=["pois"])
 app.include_router(stores.router, prefix="/api/v1", tags=["stores"])
 app.include_router(shopping.router, prefix="/api/v1", tags=["shopping"])
 app.include_router(teleop.router, prefix="/api/v1", tags=["teleop"])
+app.include_router(camera.router, prefix="/api/v1", tags=["camera"])
 
 # WebSocket
 app.include_router(ws_router)
