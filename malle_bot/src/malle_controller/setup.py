@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'mission_executor = malle_controller.mission_executor:main',
             'bridge_node       = malle_controller.bridge_node:main',
+            'cam_node          = malle_controller.cam_node:main',
 
             'mission_guide     = malle_controller.mission_guide:main',
             'mission_follow    = malle_controller.mission_follow:main',
