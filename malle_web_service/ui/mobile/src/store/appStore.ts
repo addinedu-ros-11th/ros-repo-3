@@ -341,7 +341,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             robot: {
               id: String(res.assigned_robot_id),
               name: `Mall·E-${res.assigned_robot_id}`,
-              battery: 80,
+              battery: 100,
               mode: null,
               location: { x: 0, y: 0 },
             },

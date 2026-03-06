@@ -2,6 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
+from std_msgs.msg import Float32
 
 try:
     from pinkylib import Battery
@@ -23,6 +24,7 @@ class BatteryMonitor(Node):
         self._volt_critical = self.declare_parameter('volt_critical',  _VOLT_CRITICAL).value
 
         self._status_pub = self.create_publisher(String, '/malle/battery_status', 10)
+        self._pct_pub = self.create_publisher(Float32, '/battery/present', 10)
 
         if _HAS_PINKYLIB:
             self._battery = Battery()
@@ -58,6 +60,10 @@ class BatteryMonitor(Node):
                 f'[BatteryMonitor] 충전 완료: {percentage}% ({voltage:.2f}V)')
         else:
             status = 'normal'
+
+        pct_msg = Float32()
+        pct_msg.data = float(percentage)
+        self._pct_pub.publish(pct_msg)
 
         self._publish(status)
 

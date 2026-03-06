@@ -28,7 +28,7 @@ import httpx
 # Configuration
 # ─────────────────────────────────────────────────────────────
 ROBOT_ID        = int(os.getenv("ROBOT_ID", "1"))
-ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", "malle_15")
+ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", f"malle_{ROBOT_ID}")
 
 MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
@@ -36,15 +36,12 @@ BRIDGE_SELF_URL       = os.getenv("BRIDGE_SELF_URL", "")  # 예: http://192.168.
 STATE_UPDATE_INTERVAL = 0.5
 
 
-def _topic(name: str) -> str:
-    return f"/{ROBOT_NAMESPACE}/{name.lstrip('/')}"
-
-
-TOPIC_ODOM           = _topic("odom")
-TOPIC_BATTERY        = _topic("battery/present")
-TOPIC_CMD_VEL_TELEOP = _topic("cmd_vel_teleop")
-TOPIC_PREEMPT_TELEOP = _topic("preempt_teleop")
-TOPIC_TASK_COMMAND   = _topic("task_command")
+# 각 로봇이 별도 머신에서 실행되므로 네임스페이스 없이 기본 토픽 사용
+TOPIC_ODOM           = "/odom"
+TOPIC_BATTERY        = "/battery/present"
+TOPIC_CMD_VEL_TELEOP = "/cmd_vel"
+TOPIC_PREEMPT_TELEOP = "/preempt_teleop"
+TOPIC_TASK_COMMAND   = "/task_command"
 
 JPEG_QUALITY        = 70
 STREAM_MAX_FPS      = 15
