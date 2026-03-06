@@ -356,7 +356,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   assignRobot: (robot) => set({ sessionState: 'APPROACHING', robot: { ...robot, name: robot.name.replace('PinkyPro', 'Mall·E') } }),
   startPinMatching: () => set({ sessionState: 'PIN_MATCHING', approachingEta: 0 }),
 
-  activateSession: () => set((state) => {
+  activateSession: async () => {
+    const state = get();
     const updates: Partial<AppState> = { sessionState: 'ACTIVE', session: { ...state.session, startedAt: new Date() } };
     if (state.session.type === 'TASK' && state.taskMission) {
       if (state.taskMission.type === 'GUIDE' && state.taskMission.destinationPoi) {
@@ -372,7 +373,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           selected: true,
         }];
         updates.robot = state.robot ? { ...state.robot, mode: 'GUIDE' } : null;
-        if (state.currentSessionId) guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
+        set(updates);
+        if (state.currentSessionId) {
+          await guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
+          await guideApi.execute(state.currentSessionId).catch(() => {});
+        }
+        return;
       } else if (state.taskMission.type === 'PICKUP' && state.taskMission.storeId && state.taskMission.items) {
         const store = state.stores.find(s => s.id === state.taskMission!.storeId);
         const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
@@ -381,8 +387,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         updates.robot = state.robot ? { ...state.robot, mode: 'PICKUP' } : null;
       }
     }
-    return updates;
-  }),
+    set(updates);
+  },
 
   endSession: () => {
     const { currentSessionId } = get();

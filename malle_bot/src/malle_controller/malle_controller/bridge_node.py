@@ -32,6 +32,7 @@ ROBOT_NAMESPACE = os.getenv("ROBOT_NAMESPACE", f"malle_{ROBOT_ID}")
 
 MALLE_SERVICE_URL     = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
 BRIDGE_HTTP_PORT      = int(os.getenv("BRIDGE_HTTP_PORT", "9100"))
+BRIDGE_SELF_URL       = os.getenv("BRIDGE_SELF_URL", "")  # 예: http://192.168.4.10:9100
 STATE_UPDATE_INTERVAL = 0.5
 
 
@@ -42,10 +43,12 @@ TOPIC_CMD_VEL_TELEOP = "/cmd_vel"
 TOPIC_PREEMPT_TELEOP = "/preempt_teleop"
 TOPIC_TASK_COMMAND   = "/task_command"
 
-JPEG_QUALITY   = 70
-STREAM_MAX_FPS = 15
-CAMERA_WIDTH   = 640
-CAMERA_HEIGHT  = 480
+JPEG_QUALITY        = 70
+STREAM_MAX_FPS      = 15
+CAMERA_WIDTH        = 640
+CAMERA_HEIGHT       = 480
+CAMERA_PUSH_FPS     = 10   # malle_service로 push 하는 속도 (로컬 스트림은 STREAM_MAX_FPS 유지)
+CAMERA_PUSH_ENABLED = os.getenv("CAMERA_PUSH_ENABLED", "1") == "1"
 
 # ─────────────────────────────────────────────────────────────
 # ROS2 import
@@ -63,23 +66,18 @@ except ImportError:
     HAS_ROS2 = False
     print("[bridge_node] WARNING: ROS2 not available. HTTP-only mode.")
 
-# ─────────────────────────────────────────────────────────────
-# Camera import
-# ─────────────────────────────────────────────────────────────
 try:
     import cv2
     import numpy as np
-    from malle_bot.src.malle_controller.malle_controller.camera import Camera as PinkyCamera
-    HAS_CAMERA = True
-    print("[bridge_node] Camera: camera.py loaded")
-except ImportError as e:
-    HAS_CAMERA = False
-    print(f"[bridge_node] Camera disabled: {e}")
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
 
 # ─────────────────────────────────────────────────────────────
 # FastAPI import
 # ─────────────────────────────────────────────────────────────
 try:
+    from contextlib import asynccontextmanager
     from fastapi import FastAPI
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel
@@ -95,11 +93,7 @@ except ImportError:
 # 전역 참조 (main()에서 주입)
 # ─────────────────────────────────────────────────────────────
 _ros_node = None
-_mission_executor = None
 
-# ─────────────────────────────────────────────────────────────
-# Camera frame buffer
-# ─────────────────────────────────────────────────────────────
 
 class CameraFrameBuffer:
     def __init__(self):
@@ -117,47 +111,43 @@ class CameraFrameBuffer:
 camera_buffer = CameraFrameBuffer()
 
 
-def _camera_loop():
-    if not HAS_CAMERA:
-        return
-
-    cam = None
-    while True:
-        try:
-            cam = PinkyCamera()
-            cam.start(width=CAMERA_WIDTH, height=CAMERA_HEIGHT)
-            print(f"[camera] Picamera2 started ({CAMERA_WIDTH}x{CAMERA_HEIGHT})")
-
-            while True:
-                frame = cam.get_frame()
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                _, buf = cv2.imencode(
-                    ".jpg", frame_bgr,
-                    [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-                )
-                camera_buffer.put(buf.tobytes())
-                time.sleep(1.0 / STREAM_MAX_FPS)
-
-        except RuntimeError as e:
-            print(f"[camera] Error: {e}. Retrying in 3s...")
-            if cam:
-                try: cam.close()
-                except Exception: pass
-            time.sleep(3.0)
-        except Exception as e:
-            print(f"[camera] Unexpected error: {e}. Retrying in 5s...")
-            if cam:
-                try: cam.close()
-                except Exception: pass
-            time.sleep(5.0)
-
-
 # ─────────────────────────────────────────────────────────────
 # HTTP API server (:9100)
 # ─────────────────────────────────────────────────────────────
 
 if HAS_FASTAPI:
-    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.4.0")
+    async def _push_frames_to_service():
+        """camera_buffer의 프레임을 malle_service에 주기적으로 HTTP POST."""
+        push_url = f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/camera/frame"
+        interval = 1.0 / CAMERA_PUSH_FPS
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(0.3)) as client:
+            while True:
+                frame = camera_buffer.get()
+                if frame:
+                    try:
+                        await client.post(
+                            push_url,
+                            content=frame,
+                            headers={"Content-Type": "image/jpeg"},
+                        )
+                    except (httpx.ConnectError, httpx.TimeoutException):
+                        pass
+                    except Exception as e:
+                        print(f"[bridge_node] camera push error: {e}")
+                await asyncio.sleep(interval)
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI):
+        task = None
+        if CAMERA_PUSH_ENABLED:
+            task = asyncio.create_task(_push_frames_to_service())
+            print(f"[bridge_node] camera push → {MALLE_SERVICE_URL}/robots/{ROBOT_ID}/camera/frame  @ {CAMERA_PUSH_FPS}fps")
+        yield
+        if task:
+            task.cancel()
+
+    bridge_app = FastAPI(title="Mall-E Bridge Node", version="0.4.0", lifespan=_lifespan)
 
     class CommandRequest(BaseModel):
         command: str = ""
@@ -206,8 +196,7 @@ if HAS_FASTAPI:
             "status": "ok",
             "robot_id": ROBOT_ID,
             "namespace": ROBOT_NAMESPACE,
-            "camera": HAS_CAMERA,
-            "mission_executor": _mission_executor is not None,
+            "camera": camera_buffer.get() is not None,
             "topics": {
                 "odom":           TOPIC_ODOM,
                 "battery":        TOPIC_BATTERY,
@@ -245,49 +234,36 @@ if HAS_FASTAPI:
     async def navigate_to(req: NavigateRequest):
         """
         malle_service → 이 엔드포인트 호출.
-        session_id 있으면 MissionExecutor.dispatch_guide() 사용,
+        session_id 있으면 TaskCommand를 /malle/command에 발행 (mission_executor가 처리).
         없으면 단순 좌표 이동.
         """
-        if not _mission_executor:
-            if _ros_node:
-                _ros_node.send_nav_goal(req.x, req.y, req.theta)
-            return {"ok": True, "mode": "fallback_nav"}
-
-        if req.session_id:
-            def _dispatch():
-                _mission_executor.dispatch_guide(req.session_id)
-            threading.Thread(target=_dispatch, daemon=True).start()
+        if req.session_id and _ros_node:
+            _ros_node.publish_task_command("GUIDE", str(req.session_id), "")
             return {"ok": True, "mode": "guide", "session_id": req.session_id}
-        else:
-            def _nav():
-                from malle_controller.nav_core import NavCore
-                if hasattr(_mission_executor, 'navigate_to_pose'):
-                    _mission_executor.navigate_to_pose(req.x, req.y, req.theta)
-            threading.Thread(target=_nav, daemon=True).start()
-            return {"ok": True, "mode": "direct_nav"}
+
+        if _ros_node:
+            _ros_node.send_nav_goal(req.x, req.y, req.theta)
+        return {"ok": True, "mode": "fallback_nav"}
 
     @bridge_app.post("/bridge/guide/advance")
     async def guide_advance():
-        if _mission_executor:
-            threading.Thread(
-                target=lambda: _mission_executor._guide.advance(),
-                daemon=True
-            ).start()
+        """다음 POI로 이동 (Robot UI 'Next Stop' / Mobile 'Mark as Arrived')."""
+        if _ros_node:
+            _ros_node.publish_guide_advance()
         return {"ok": True}
 
     @bridge_app.post("/bridge/guide/stop")
     async def guide_stop():
-        if _mission_executor:
-            _mission_executor._guide.stop()
+        if _ros_node:
+            _ros_node.publish_trigger("stop_guide")
         return {"ok": True}
 
     @bridge_app.post("/bridge/stop")
     async def stop_mission():
         """E-Stop 또는 세션 종료 시 모든 미션 중지."""
-        if _mission_executor:
-            _mission_executor.stop_all()
-        elif _ros_node:
+        if _ros_node:
             _ros_node.publish_cmd_vel(0.0, 0.0)
+            _ros_node.publish_trigger("idle")
         return {"ok": True}
     
     @bridge_app.post("/bridge/errand/start")
@@ -319,7 +295,7 @@ if HAS_FASTAPI:
     # ── MJPEG 스트리밍 ──────────────────────────────────────────────────────
 
     def _make_placeholder(robot_id: int) -> bytes:
-        if not HAS_CAMERA:
+        if not HAS_CV2:
             return b""
         img = np.zeros((CAMERA_HEIGHT, CAMERA_WIDTH, 3), dtype=np.uint8)
         cv2.putText(
@@ -371,6 +347,9 @@ if HAS_FASTAPI:
 # ─────────────────────────────────────────────────────────────
 
 if HAS_ROS2:
+    from sensor_msgs.msg import Image as RosImage
+    from malle_controller.msg import TaskCommand as TaskCommandMsg
+
     class BridgeNode(Node):
         def __init__(self):
             super().__init__(f"malle_bridge_{ROBOT_NAMESPACE}")
@@ -387,13 +366,16 @@ if HAS_ROS2:
 
             self.create_subscription(Odometry, TOPIC_ODOM, self._odom_cb, 10)
             self.create_subscription(Float32, TOPIC_BATTERY, self._battery_cb, 10)
+            self.create_subscription(RosImage, '/camera/image_raw', self._image_cb, 1)
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
 
-            self._cmd_vel_pub      = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
-            self._preempt_pub      = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
+            self._cmd_vel_pub = self.create_publisher(Twist, TOPIC_CMD_VEL_TELEOP, 10)
+            self._preempt_pub = self.create_publisher(Empty, TOPIC_PREEMPT_TELEOP, 10)
             self._task_command_pub = self.create_publisher(String, TOPIC_TASK_COMMAND, 10)
             self._mission_trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
+            self._malle_command_pub = self.create_publisher(TaskCommandMsg, '/malle/command', 10)
+            self._guide_advance_pub = self.create_publisher(String, '/malle/guide_advance', 10)
             self._nav2_client = ActionClient(self, NavigateToPose, '/navigate_to_pose')
 
             self.create_timer(STATE_UPDATE_INTERVAL, self._push_state)
@@ -418,19 +400,30 @@ if HAS_ROS2:
         def _battery_cb(self, msg: Float32):
             self._state["battery_pct"] = int(msg.data)
 
+        def _image_cb(self, msg: RosImage):
+            if not HAS_CV2:
+                return
+            frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            _, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            camera_buffer.put(buf.tobytes())
+
         def _push_state(self):
             motion = "MOVING" if self._state["speed_mps"] > 0.01 else "STOPPED"
+            payload = {
+                "x_m":          self._state["x_m"],
+                "y_m":          self._state["y_m"],
+                "theta_rad":    self._state["theta_rad"],
+                "speed_mps":    self._state["speed_mps"],
+                "battery_pct":  self._state["battery_pct"],
+                "motion_state": motion,
+            }
+            if BRIDGE_SELF_URL:
+                payload["bridge_url"] = BRIDGE_SELF_URL
             try:
                 self._http_client.patch(
                     f"{MALLE_SERVICE_URL}/robots/{ROBOT_ID}/state",
-                    json={
-                        "x_m":          self._state["x_m"],
-                        "y_m":          self._state["y_m"],
-                        "theta_rad":    self._state["theta_rad"],
-                        "speed_mps":    self._state["speed_mps"],
-                        "battery_pct":  self._state["battery_pct"],
-                        "motion_state": motion,
-                    },
+                    json=payload,
                 )
             except httpx.ConnectError:
                 pass
@@ -462,7 +455,21 @@ if HAS_ROS2:
             """mission_follow.py 등 /malle/mission_trigger 구독자에게 명령 발행."""
             msg = String()
             msg.data = command
-            self._mission_trigger_pub.publish(msg)    
+            self._mission_trigger_pub.publish(msg)
+
+        def publish_task_command(self, task_type: str, task_id: str, poi_ids: str):
+            """mission_executor에게 TaskCommand 발행."""
+            msg = TaskCommandMsg()
+            msg.task_type = task_type
+            msg.task_id = task_id
+            msg.poi_ids = poi_ids
+            self._malle_command_pub.publish(msg)
+
+        def publish_guide_advance(self):
+            """/malle/guide_advance 발행 — mission_executor가 GuideExecutor.advance() 호출."""
+            msg = String()
+            msg.data = "advance"
+            self._guide_advance_pub.publish(msg)
 
         def send_nav_goal(self, x: float, y: float, theta: float):
             """Nav2 NavigateToPose 액션으로 직접 이동 명령."""
@@ -494,10 +501,7 @@ def run_http_server():
 
 
 def main():
-    global _ros_node, _mission_executor
-
-    # 카메라 스레드
-    threading.Thread(target=_camera_loop, daemon=True).start()
+    global _ros_node
 
     # HTTP 서버 스레드
     threading.Thread(target=run_http_server, daemon=True).start()
@@ -512,19 +516,9 @@ def main():
         bridge = BridgeNode()
         _ros_node = bridge
 
-        try:
-            from malle_controller.mission_executor import MissionExecutor
-            executor = MissionExecutor(api_base_url=MALLE_SERVICE_URL)
-            _mission_executor = executor
-            print("[bridge_node] MissionExecutor 로드 완료")
-        except Exception as e:
-            print(f"[bridge_node] MissionExecutor 로드 실패: {e} — 폴백 모드")
-
         from rclpy.executors import MultiThreadedExecutor
         ros_executor = MultiThreadedExecutor()
         ros_executor.add_node(bridge)
-        if _mission_executor:
-            ros_executor.add_node(_mission_executor)
 
         try:
             ros_executor.spin()
