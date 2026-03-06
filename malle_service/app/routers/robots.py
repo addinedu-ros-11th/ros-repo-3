@@ -139,6 +139,23 @@ async def update_robot_state(
         "battery_pct": robot.battery_pct,
     })
 
+    await manager.send_to_robot(robot_id, WsEvent.ROBOT_STATE_UPDATED, {
+        "battery_pct": robot.battery_pct,
+    })
+
+    from app.models.session import Session, SessionStatus as SS
+    active_sess_result = await db.execute(
+        select(Session).where(
+            Session.assigned_robot_id == robot_id,
+            Session.status.in_([SS.APPROACHING, SS.MATCHING, SS.ACTIVE]),
+        )
+    )
+    active_session = active_sess_result.scalar_one_or_none()
+    if active_session:
+        await manager.send_to_mobile(active_session.id, WsEvent.ROBOT_STATE_UPDATED, {
+            "battery_pct": robot.battery_pct,
+        })
+
     return robot
 
 

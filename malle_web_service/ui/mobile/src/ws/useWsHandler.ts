@@ -49,7 +49,7 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useAppStore.ge
         store.assignRobot({
           id: String(robotId),
           name: p.robot_name || `Mall·E-${robotId}`,
-          battery: p.battery_pct ?? 80,
+          battery: p.battery_pct ?? 100,
           mode: null,
           location: { x: p.x_m ?? 0, y: p.y_m ?? 0 },
         });

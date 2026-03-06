@@ -34,7 +34,7 @@ const storeProducts: Record<string, { name: string; price: number }[]> = {
 type WizardStep = 'type' | 'mission-type' | 'mission-detail' | 'mission-summary';
 
 export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
-  const { startFindingRobot, assignRobot, setTaskMission, stores, pois } = useAppStore();
+  const { startFindingRobot, setTaskMission, stores, pois } = useAppStore();
   const [sessionType, setSessionType] = useState<SessionType>('TIME');
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [isLoading, setIsLoading] = useState(false);
@@ -67,11 +67,8 @@ export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
   const handleStartTime = () => {
     setIsLoading(true);
     startFindingRobot('TIME', selectedDuration);
-    setTimeout(() => {
-      assignRobot({ id: 'robot-1', name: 'Mall·E-1', battery: 78, mode: null, location: { x: 100, y: 100 } });
-      setIsLoading(false);
-      handleClose();
-    }, 2000);
+    setIsLoading(false);
+    handleClose();
   };
 
   const handleStartTask = () => {
@@ -91,11 +88,8 @@ export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
     }
 
     startFindingRobot('TASK', 0);
-    setTimeout(() => {
-      assignRobot({ id: 'robot-1', name: 'Mall·E-1', battery: 78, mode: null, location: { x: 100, y: 100 } });
-      setIsLoading(false);
-      handleClose();
-    }, 2000);
+    setIsLoading(false);
+    handleClose();
   };
 
   const handleAddItem = (product: { name: string; price: number }) => {

@@ -133,7 +133,7 @@ interface RobotStore {
 const initialRobot: Robot = {
   id: '1',
   name: 'Mall·E-1',
-  battery: 78,
+  battery: 100,
   networkStrength: 'Strong',
   status: 'IDLE',
 };
