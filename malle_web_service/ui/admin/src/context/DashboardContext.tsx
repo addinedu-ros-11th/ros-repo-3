@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { robotApi, missionApi, eventApi, zoneApi, teleopApi, lockboxApi, type LockboxSlotRes } from '@/api/services';
+import { robotApi, missionApi, eventApi, zoneApi, teleopApi, lockboxApi, poiApi, type LockboxSlotRes, type PoiRes } from '@/api/services';
 import { useWsHandler } from '@/ws/useWsHandler';
 
 export interface Robot {
@@ -7,7 +7,7 @@ export interface Robot {
   battery: number;
   mode: 'GUIDE' | 'FOLLOW' | 'PICKUP' | null;
   status: 'MOVING' | 'WAITING' | 'E_STOP' | 'CHARGING' | 'OFFLINE' | 'HEADING_MAINTENANCE' | 'HEADING_STATION';
-  position: { x: number; y: number };
+  position: { x: number; y: number }; // meters (x_m, y_m)
   currentTarget: string | null;
   eta: number | null;
   sessionId: string | null;
@@ -68,6 +68,7 @@ interface DashboardState {
   missions: Mission[];
   zones: Zone[];
   events: DashboardEvent[];
+  pois: PoiRes[];  // ★ 추가
   emergencyBanner: { active: boolean; message: string; robotId: string } | null;
   teleopState: { active: boolean; targetRobotId: string | null; log: TeleopLog[] };
   selectedRobotId: string | null;
@@ -166,6 +167,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
   const [events, setEvents] = useState<DashboardEvent[]>([]);
+  const [pois, setPois] = useState<PoiRes[]>([]);  // ★ 추가
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
   const [darkMode, setDarkMode] = useState(false);
   const [expandedMissionId, setExpandedMissionId] = useState<string | null>(null);
@@ -190,7 +192,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         battery: r.battery_pct,
         mode: mapModeStr(r.current_mode),
         status: r.state ? mapMotionToStatus(r.state) : (r.is_online ? 'WAITING' : 'OFFLINE'),
-        position: { x: r.state?.x_m ?? 0, y: r.state?.y_m ?? 0 },
+        position: { x: r.state?.x_m ?? 0, y: r.state?.y_m ?? 0 },  // meters
         currentTarget: null,
         eta: r.state?.eta_sec ?? null,
         sessionId: null,
@@ -202,7 +204,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
         lockboxSlots: [],
       }));
       setRobots(mapped);
-      // 각 로봇의 락박스 슬롯 상태 조회
       mapped.forEach((robot) => {
         const numId = parseInt(robot.id.replace('R-', ''));
         if (!isNaN(numId)) {
@@ -262,14 +263,18 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       }));
       setZones(mapped);
     }).catch(() => {});
+
+    // ★ POIs
+    poiApi.list().then((res) => {
+      if (!res?.length) return;
+      setPois(res);
+    }).catch(() => {});
   }, []);
 
   /* ───── ★ WS 핸들러 콜백 연결 ───── */
   useWsHandler({
     onRobotStateUpdated: useCallback((robotId: number, state: Record<string, any>) => {
       const rid = `R-${robotId}`;
-      // payload shape: { robot_id, battery_pct, state: { x_m, y_m, motion_state, nav_state, stop_state, eta_sec, ... } }
-      // OR flat shape from command events: { robot_id, command }
       const nestedState = state.state as Record<string, any> | undefined;
       const x = nestedState?.x_m ?? state.x_m;
       const y = nestedState?.y_m ?? state.y_m;
@@ -281,7 +286,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       setRobots(prev => prev.map(r => r.id === rid ? {
         ...r,
         ...(battery !== undefined ? { battery } : {}),
-        ...(x !== undefined ? { position: { x, y: y ?? r.position.y } } : {}),
+        ...(x !== undefined ? { position: { x, y: y ?? r.position.y } } : {}),  // meters
         ...(motionOrNav || stopState ? { status: mapMotionToStatus({ motion_state: motionOrNav, nav_state: motionOrNav, stop_state: stopState }) } : {}),
         ...(eta !== undefined ? { eta } : {}),
         lastSeen: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -347,7 +352,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }, []),
 
     onGuideArrived: useCallback((data: Record<string, any>) => {
-      // 미션 가이드큐에서 해당 POI ARRIVED로 변경
       setMissions(prev => prev.map(m => {
         if (!m.guideQueue) return m;
         return {
@@ -360,7 +364,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     }, []),
 
     onPickupStatusChanged: useCallback((data: Record<string, any>) => {
-      // 해당 로봇의 미션 상태 갱신
       if (data.robot_id) {
         const rid = `R-${data.robot_id}`;
         setMissions(prev => prev.map(m =>
@@ -433,35 +436,30 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const triggerEStop = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, eStopActive: true, eStopSource: 'DASHBOARD', status: 'E_STOP' as const } : r));
-    // ★ API
     const numId = parseInt(robotId.replace('R-', ''));
     if (!isNaN(numId)) robotApi.triggerEStop(numId, 'DASHBOARD').catch(() => {});
   }, []);
 
   const releaseEStop = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, eStopActive: false, eStopSource: null, status: 'WAITING' as const } : r));
-    // ★ API
     const numId = parseInt(robotId.replace('R-', ''));
     if (!isNaN(numId)) robotApi.releaseEStop(numId).catch(() => {});
   }, []);
 
   const stopMission = useCallback((missionId: string) => {
     setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'PAUSED' as const } : m));
-    // ★ API
     const numId = parseInt(missionId.replace('M-', ''));
     if (!isNaN(numId)) missionApi.updateStatus(numId, 'PAUSED').catch(() => {});
   }, []);
 
   const restartMission = useCallback((missionId: string) => {
     setMissions(prev => prev.map(m => m.id === missionId ? { ...m, status: 'RUNNING' as const } : m));
-    // ★ API
     const numId = parseInt(missionId.replace('M-', ''));
     if (!isNaN(numId)) missionApi.updateStatus(numId, 'RUNNING').catch(() => {});
   }, []);
 
   const toggleZone = useCallback((zoneId: string) => {
     setZones(prev => prev.map(z => z.id === zoneId ? { ...z, active: !z.active } : z));
-    // ★ API
     const numId = parseInt(zoneId.replace('Z-', ''));
     const zone = zones.find(z => z.id === zoneId);
     if (!isNaN(numId) && zone) zoneApi.update(numId, { is_active: !zone.active }).catch(() => {});
@@ -469,7 +467,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const addZone = useCallback((zone: Zone) => {
     setZones(prev => [...prev, zone]);
-    // ★ API
     zoneApi.create({
       name: zone.name,
       polygon_wkt: `POLYGON((${zone.polygon.map(p => `${p.x} ${p.y}`).join(', ')}))`,
@@ -481,14 +478,12 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const deleteZone = useCallback((zoneId: string) => {
     setZones(prev => prev.filter(z => z.id !== zoneId));
-    // ★ API
     const numId = parseInt(zoneId.replace('Z-', ''));
     if (!isNaN(numId)) zoneApi.delete(numId).catch(() => {});
   }, []);
 
   const startTeleop = useCallback((robotId: string) => {
     setTeleopState({ active: true, targetRobotId: robotId, log: [{ timestamp: new Date().toLocaleTimeString(), action: 'TELEOP_START' }] });
-    // ★ API
     const numId = parseInt(robotId.replace('R-', ''));
     if (!isNaN(numId)) teleopApi.start(numId).catch(() => {});
   }, []);
@@ -496,7 +491,6 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const stopTeleop = useCallback(() => {
     const rid = teleopState.targetRobotId;
     setTeleopState(prev => ({ ...prev, active: false, log: [...prev.log, { timestamp: new Date().toLocaleTimeString(), action: 'TELEOP_STOP' }] }));
-    // ★ API
     if (rid) {
       const numId = parseInt(rid.replace('R-', ''));
       if (!isNaN(numId)) teleopApi.stop(numId).catch(() => {});
@@ -511,21 +505,19 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
 
   const sendToMaintenance = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, status: 'HEADING_MAINTENANCE' as const, currentTarget: 'Maintenance Center', eStopActive: false, eStopSource: null } : r));
-    // ★ API
     const numId = parseInt(robotId.replace('R-', ''));
     if (!isNaN(numId)) robotApi.sendCommand(numId, 'go_maintenance').catch(() => {});
   }, []);
 
   const returnToStation = useCallback((robotId: string) => {
     setRobots(prev => prev.map(r => r.id === robotId ? { ...r, status: 'HEADING_STATION' as const, currentTarget: 'Home Station', eStopActive: false, eStopSource: null } : r));
-    // ★ API
     const numId = parseInt(robotId.replace('R-', ''));
     if (!isNaN(numId)) robotApi.sendCommand(numId, 'return_station').catch(() => {});
   }, []);
 
   return (
     <DashboardContext.Provider value={{
-      robots, missions, zones, events, emergencyBanner, teleopState, selectedRobotId, darkMode,
+      robots, missions, zones, events, pois, emergencyBanner, teleopState, selectedRobotId, darkMode,
       expandedMissionId, expandedAlertId,
       selectRobot, toggleDarkMode, triggerEStop, releaseEStop, stopMission, restartMission,
       toggleZone, addZone, deleteZone, startTeleop, stopTeleop, addTeleopLog, dismissEmergency, sendToMaintenance, returnToStation,
