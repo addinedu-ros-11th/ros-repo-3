@@ -54,6 +54,52 @@ def _load_waypoint_graph(yaml_path: str | None = None) -> tuple[dict, dict]:
 
 
 # ─────────────────────────────────────────────────────────────
+# AprilTag Config Loader
+# ─────────────────────────────────────────────────────────────
+
+def _load_apriltag_config(yaml_path: str | None = None) -> tuple[dict, tuple, float, dict]:
+    """
+    apriltag_poses.yaml 로드.
+
+    Returns:
+        tag_info:   { tag_id(int): {"yaw": float} }
+        cam_params: (fx, fy, cx, cy)
+        tag_size:   float (미터)
+        corr_cfg:   { max_detect_dist, max_angle_deg, cooldown_sec }
+    """
+    if yaml_path is None:
+        yaml_path = os.path.join(
+            ament.get_package_share_directory('malle_controller'),
+            'config', 'apriltag_poses.yaml'
+        )
+    try:
+        import yaml
+        with open(yaml_path, 'r') as f:
+            data = yaml.safe_load(f)
+        tag_info = {int(k): v for k, v in data.get('tags', {}).items()}
+        cam = data.get('camera', {})
+        cam_params = (
+            float(cam.get('fx', 570.34)),
+            float(cam.get('fy', 570.34)),
+            float(cam.get('cx', 320.0)),
+            float(cam.get('cy', 240.0)),
+        )
+        tag_size = float(data.get('tag_size', 0.05))
+        corr = data.get('correction', {})
+        corr_cfg = {
+            'max_detect_dist': float(corr.get('max_detect_dist', 0.3)),
+            'max_angle_deg':   float(corr.get('max_angle_deg',   10.0)),
+            'cooldown_sec':    float(corr.get('cooldown_sec',    10.0)),
+        }
+        return tag_info, cam_params, tag_size, corr_cfg
+    except Exception as e:
+        print(f"[NavCore] apriltag_poses.yaml 로드 실패: {e} — 교정 비활성화")
+        return {}, (570.34, 570.34, 320.0, 240.0), 0.05, {
+            'max_detect_dist': 0.3, 'max_angle_deg': 10.0, 'cooldown_sec': 10.0,
+        }
+
+
+# ─────────────────────────────────────────────────────────────
 # NavCore Mixin
 # ─────────────────────────────────────────────────────────────
 
@@ -102,6 +148,34 @@ class NavCore:
         except Exception:
             self._has_tf = False
             node.get_logger().warn("[NavCore] TF2 사용 불가 — 현재 위치 추정 비활성화")
+
+        # AprilTag pose 교정 (Nav2 이동 중 yaw 재정렬)
+        self._tag_detector        = None
+        self._tag_frame           = None
+        self._tag_frame_lock      = threading.Lock()
+        self._tag_last_correction = None
+
+        try:
+            import cv2 as _cv2
+            from pupil_apriltags import Detector as _Detector
+            _tag_info, _cam_params, _tag_size, _corr_cfg = _load_apriltag_config()
+            if _tag_info:
+                from sensor_msgs.msg import Image as _RosImage
+                from geometry_msgs.msg import PoseWithCovarianceStamped as _PWCS
+                self._tag_cv2        = _cv2
+                self._tag_detector   = _Detector(families='tag36h11', nthreads=2)
+                self._tag_info       = _tag_info
+                self._tag_cam_params = _cam_params
+                self._tag_size       = _tag_size
+                self._tag_corr_cfg   = _corr_cfg
+                self._initialpose_pub = node.create_publisher(_PWCS, '/initialpose', 10)
+                node.create_subscription(_RosImage, '/camera/image_raw', self._tag_image_cb, 1)
+                node.create_timer(0.5, self._tag_correction_tick)
+                node.get_logger().info(
+                    f'[NavCore] AprilTag 교정 활성화 ({len(_tag_info)}개 태그)'
+                )
+        except Exception as e:
+            node.get_logger().info(f'[NavCore] AprilTag 교정 비활성화: {e}')
 
     # ── Nav2 단순 이동 ────────────────────────────────────────
 
@@ -419,6 +493,8 @@ class NavCore:
             self._node.get_logger().error('[NavCore] 액션 서버 없음')
             return False
 
+        self._nav_mode = 'NAV2'
+
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
 
@@ -427,15 +503,18 @@ class NavCore:
         deadline = time.time() + 10.0
         while not send_future.done():
             if self._nav_abort:
+                self._nav_mode = 'IDLE'
                 return False
             if time.time() > deadline:
                 self._node.get_logger().error('[NavCore] goal 전송 타임아웃')
+                self._nav_mode = 'IDLE'
                 return False
             time.sleep(0.05)
 
         goal_handle = send_future.result()
         if not goal_handle.accepted:
             self._node.get_logger().warn('[NavCore] goal 거절됨')
+            self._nav_mode = 'IDLE'
             return False
 
         self._current_goal_handle = goal_handle
@@ -444,10 +523,12 @@ class NavCore:
         while not result_future.done():
             if self._nav_abort:
                 goal_handle.cancel_goal_async()
+                self._nav_mode = 'IDLE'
                 return False
             time.sleep(0.1)
 
         self._current_goal_handle = None
+        self._nav_mode = 'IDLE'
         return result_future.result().status == 4
 
     # ── 웨이포인트 유틸 ──────────────────────────────────────
@@ -595,6 +676,99 @@ class NavCore:
             self._node.get_logger().warn('[NavCore] 목표 거절됨')
             return
         self._current_goal_handle = goal_handle
+
+    # ── AprilTag pose 교정 ────────────────────────────────────
+
+    def _tag_image_cb(self, msg):
+        """최신 gray 프레임을 버퍼에 저장."""
+        if self._tag_detector is None:
+            return
+        import numpy as np
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        gray = self._tag_cv2.cvtColor(frame, self._tag_cv2.COLOR_RGB2GRAY)
+        with self._tag_frame_lock:
+            self._tag_frame = gray
+
+    def _tag_correction_tick(self):
+        """0.5s 타이머 — AprilTag 검출 후 yaw 교정 시도."""
+        if self._tag_detector is None:
+            return
+        with self._tag_frame_lock:
+            gray = self._tag_frame
+        if gray is None:
+            return
+        self._try_tag_correction(gray)
+
+    def _try_tag_correction(self, gray):
+        now = self._node.get_clock().now()
+        if self._tag_last_correction is not None:
+            elapsed = (now - self._tag_last_correction).nanoseconds * 1e-9
+            if elapsed < self._tag_corr_cfg['cooldown_sec']:
+                return
+
+        tags = self._tag_detector.detect(
+            gray,
+            estimate_tag_pose=True,
+            camera_params=self._tag_cam_params,
+            tag_size=self._tag_size,
+        )
+
+        for tag in tags:
+            if tag.tag_id not in self._tag_info:
+                continue
+
+            tz = float(tag.pose_t[2].item())
+            if tz > self._tag_corr_cfg['max_detect_dist']:
+                self._node.get_logger().debug(
+                    f'[NavCore] AprilTag ID:{tag.tag_id} 거리 초과 스킵 ({tz:.2f}m)'
+                )
+                continue
+
+            tx = float(tag.pose_t[0].item())
+            if abs(math.degrees(math.atan2(tx, tz))) > self._tag_corr_cfg['max_angle_deg']:
+                self._node.get_logger().debug(
+                    f'[NavCore] AprilTag ID:{tag.tag_id} 각도 초과 스킵'
+                )
+                continue
+
+            curr_x, curr_y = self._get_current_position()
+            if curr_x is None:
+                self._node.get_logger().warn('[NavCore] AprilTag 교정: TF 없음, 스킵')
+                continue
+
+            robot_yaw = self._compute_yaw_from_tag(tag.tag_id, tag.pose_R)
+            self._do_initialpose(curr_x, curr_y, robot_yaw)
+            self._tag_last_correction = now
+            self._node.get_logger().info(
+                f'[NavCore] AprilTag ID:{tag.tag_id} | dist={tz:.2f}m '
+                f'| yaw 교정 → {math.degrees(robot_yaw):.1f}°'
+            )
+            break  # 한 프레임에 하나의 태그만 처리
+
+    def _compute_yaw_from_tag(self, tag_id: int, R_cam) -> float:
+        """태그 회전 행렬 → 로봇의 map 기준 yaw."""
+        tag_yaw = self._tag_info[tag_id]['yaw']
+        tag_z   = R_cam[:, 2]
+        angle_h = math.atan2(float(tag_z[0]), float(tag_z[2]))
+        robot_yaw = tag_yaw + math.pi - angle_h
+        return math.atan2(math.sin(robot_yaw), math.cos(robot_yaw))
+
+    def _do_initialpose(self, x: float, y: float, yaw: float):
+        """AMCL에 /initialpose 발행하여 yaw 교정."""
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        msg = PoseWithCovarianceStamped()
+        msg.header.stamp    = self._node.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        cov = [0.0] * 36
+        cov[0]  = 0.05 ** 2   # x 공분산
+        cov[7]  = 0.05 ** 2   # y 공분산
+        cov[35] = math.radians(5) ** 2  # yaw 공분산
+        msg.pose.covariance = cov
+        self._initialpose_pub.publish(msg)
 
     @staticmethod
     def _ray_cast(px: float, py: float, polygon: list) -> bool:

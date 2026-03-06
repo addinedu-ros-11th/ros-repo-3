@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
@@ -59,6 +59,75 @@ export default function FleetMapPage() {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const selectedRobot = robots.find(r => r.id === selectedRobotId);
 
+  // Zoom & Pan state
+  const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
+  const isPanning = useRef(false);
+  const lastPan = useRef({ x: 0, y: 0 });
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+
+  const MIN_SCALE = 0.5;
+  const MAX_SCALE = 5;
+
+  const clampTransform = useCallback((x: number, y: number, scale: number) => {
+    return { x, y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale)) };
+  }, []);
+
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const rect = mapContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    setTransform(prev => {
+      const delta = e.deltaY > 0 ? 0.85 : 1.15;
+      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * delta));
+      const scaleRatio = newScale / prev.scale;
+
+      // Zoom toward cursor
+      const newX = mouseX - scaleRatio * (mouseX - prev.x);
+      const newY = mouseY - scaleRatio * (mouseY - prev.y);
+
+      return clampTransform(newX, newY, newScale);
+    });
+  }, [clampTransform]);
+
+  useEffect(() => {
+    const el = mapContainerRef.current;
+    if (!el) return;
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Only pan on left click, not on robot markers
+    if ((e.target as Element).closest('[data-robot]')) return;
+    isPanning.current = true;
+    lastPan.current = { x: e.clientX, y: e.clientY };
+    e.currentTarget.setAttribute('data-dragging', 'true');
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isPanning.current) return;
+    const dx = e.clientX - lastPan.current.x;
+    const dy = e.clientY - lastPan.current.y;
+    lastPan.current = { x: e.clientX, y: e.clientY };
+    setTransform(prev => clampTransform(prev.x + dx, prev.y + dy, prev.scale));
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    isPanning.current = false;
+    e.currentTarget.removeAttribute('data-dragging');
+  };
+
+  const handleMouseLeave = (e: React.MouseEvent) => {
+    isPanning.current = false;
+    e.currentTarget.removeAttribute('data-dragging');
+  };
+
+  const resetZoom = () => setTransform({ x: 0, y: 0, scale: 1 });
+
   const toggleLayer = (key: keyof typeof layers) => setLayers(prev => ({ ...prev, [key]: !prev[key] }));
 
   const executeAction = () => {
@@ -72,119 +141,174 @@ export default function FleetMapPage() {
   };
 
   return (
-    <div className="h-[calc(100vh-4rem)]">
+    <div className="h-[calc(100vh-4rem)] flex flex-col">
       <PageHeader title="Fleet Map" subtitle="Real-time fleet monitoring" />
 
-      <div className="flex gap-0 h-[calc(100%-6rem)] -mx-8 -mb-8">
-        {/* Map Area */}
-        <div className="flex-1 relative bg-secondary/30 overflow-hidden">
-          {/* Layer toggles */}
-          <div className="absolute top-4 left-4 z-10 flex gap-2">
-            {Object.entries(layers).map(([key, active]) => (
+      {/* Main content: map + detail panel side-by-side */}
+      <div className="flex gap-0 flex-1 -mx-8 min-h-0 overflow-hidden">
+
+        {/* Left: Map + Cards stacked vertically */}
+        <div className="flex-1 flex flex-col min-h-0">
+
+          {/* Map Area */}
+          <div
+            ref={mapContainerRef}
+            className="flex-1 relative bg-secondary/30 overflow-hidden cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+          >
+            {/* Layer toggles */}
+            <div className="absolute top-4 left-4 z-10 flex gap-2 pointer-events-auto">
+              {Object.entries(layers).map(([key, active]) => (
+                <button
+                  key={key}
+                  onClick={() => toggleLayer(key as keyof typeof layers)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold shadow-sm border transition-all ${
+                    active ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-muted-foreground border-border'
+                  }`}
+                >
+                  {key.charAt(0).toUpperCase() + key.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {/* Zoom controls */}
+            <div className="absolute top-4 right-4 z-10 flex flex-col gap-1 pointer-events-auto">
               <button
-                key={key}
-                onClick={() => toggleLayer(key as keyof typeof layers)}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold shadow-sm border transition-all ${
-                  active ? 'bg-primary text-primary-foreground border-primary' : 'bg-card text-muted-foreground border-border'
-                }`}
+                onClick={() => setTransform(prev => clampTransform(prev.x, prev.y, prev.scale * 1.25))}
+                className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors text-sm font-bold"
               >
-                {key.charAt(0).toUpperCase() + key.slice(1)}
+                +
               </button>
-            ))}
+              <button
+                onClick={() => setTransform(prev => clampTransform(prev.x, prev.y, prev.scale * 0.8))}
+                className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors text-sm font-bold"
+              >
+                −
+              </button>
+              <button
+                onClick={resetZoom}
+                className="w-8 h-8 bg-card border border-border rounded-lg flex items-center justify-center shadow-sm hover:bg-secondary transition-colors"
+                title="Reset zoom"
+              >
+                <MI icon="center_focus_strong" className="text-muted-foreground text-sm" />
+              </button>
+            </div>
+
+            {/* Scale indicator */}
+            <div className="absolute bottom-3 right-4 z-10 text-[10px] text-muted-foreground bg-card/80 px-2 py-1 rounded-md border border-border">
+              {Math.round(transform.scale * 100)}%
+            </div>
+
+            {/* Zoomable/pannable SVG layer */}
+            <div
+              className="absolute inset-0"
+              style={{
+                transform: `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale})`,
+                transformOrigin: '0 0',
+                willChange: 'transform',
+              }}
+            >
+              <svg className="w-full h-full" viewBox="0 0 450 380" preserveAspectRatio="xMidYMid meet" style={{ display: 'block', width: '100%', height: '100%' }}>
+                <defs>
+                  <pattern id="dotGrid" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+                    <circle cx="1" cy="1" r="1" className="fill-muted-foreground/20" />
+                  </pattern>
+                </defs>
+
+                <image href="/map_end_end.png" x="0" y="0" width="450" height="380" preserveAspectRatio="xMidYMid meet" opacity="0.85" />
+
+                {/* Zones */}
+                {layers.zones && zones.map(zone => {
+                  const pts = zone.polygon.map(p => `${p.x},${p.y}`).join(' ');
+                  const fill = zone.type === 'RESTRICTED' ? 'rgba(239,68,68,0.15)' : zone.type === 'MAINTENANCE' ? 'rgba(168,85,247,0.15)' : zone.type === 'CONGESTED' ? 'rgba(234,179,8,0.15)' : 'rgba(249,115,22,0.15)';
+                  const stroke = zone.type === 'RESTRICTED' ? '#ef4444' : zone.type === 'MAINTENANCE' ? '#a855f7' : zone.type === 'CONGESTED' ? '#eab308' : '#f97316';
+                  return (
+                    <g key={zone.id}>
+                      <polygon
+                        points={pts}
+                        fill={zone.active ? fill : 'none'}
+                        stroke={stroke}
+                        strokeWidth="2"
+                        strokeDasharray={zone.active ? '' : '6 4'}
+                        opacity={zone.active ? 1 : 0.4}
+                      />
+                      <text x={zone.polygon[0].x + 5} y={zone.polygon[0].y - 5} className="fill-muted-foreground text-[8px] font-bold">{zone.name}</text>
+                    </g>
+                  );
+                })}
+
+                {/* Routes */}
+                {layers.routes && robots.filter(r => r.currentTarget).map(robot => (
+                  <line
+                    key={`route-${robot.id}`}
+                    x1={robot.position.x}
+                    y1={robot.position.y}
+                    x2={robot.position.x + 50}
+                    y2={robot.position.y - 30}
+                    stroke="hsl(239,84%,67%)"
+                    strokeWidth="1.5"
+                    strokeDasharray="4 4"
+                    opacity="0.5"
+                  />
+                ))}
+
+                {/* Robot markers */}
+                {layers.robots && robots.map(robot => {
+                  const isSelected = robot.id === selectedRobotId;
+                  const fill = robot.status === 'E_STOP' ? '#ef4444'
+                    : robot.status === 'HEADING_MAINTENANCE' || robot.status === 'HEADING_STATION' ? '#f59e0b'
+                    : robot.status === 'MOVING' ? '#3b82f6'
+                    : robot.status === 'CHARGING' ? '#6366f1'
+                    : '#94a3b8';
+                  return (
+                    <g
+                      key={robot.id}
+                      data-robot={robot.id}
+                      className="cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectRobot(robot.id === selectedRobotId ? null : robot.id);
+                      }}
+                    >
+                      {isSelected && <circle cx={robot.position.x} cy={robot.position.y} r="18" fill="none" stroke={fill} strokeWidth="2" opacity="0.4">
+                        <animate attributeName="r" from="14" to="22" dur="1.5s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" from="0.4" to="0" dur="1.5s" repeatCount="indefinite" />
+                      </circle>}
+                      {robot.status === 'E_STOP' && <circle cx={robot.position.x} cy={robot.position.y} r="14" fill={fill} opacity="0.2">
+                        <animate attributeName="opacity" from="0.3" to="0" dur="1s" repeatCount="indefinite" />
+                      </circle>}
+                      <circle cx={robot.position.x} cy={robot.position.y} r="8" fill={fill} stroke="white" strokeWidth="2" />
+                      <text x={robot.position.x} y={robot.position.y - 14} textAnchor="middle" className="fill-foreground text-[8px] font-bold">{robot.id}</text>
+                    </g>
+                  );
+                })}
+
+                {/* Destinations */}
+                {layers.destinations && (
+                  <>
+                    {[{ name: 'Zara Store', x: 170, y: 50 }, { name: 'Nike', x: 80, y: 190 }, { name: 'Apple Store', x: 340, y: 100 }, { name: 'Starbucks', x: 200, y: 260 }].map(poi => (
+                      <g key={poi.name}>
+                        <rect x={poi.x - 3} y={poi.y - 3} width="6" height="6" rx="1" className="fill-primary" />
+                        <text x={poi.x + 8} y={poi.y + 3} className="fill-muted-foreground text-[7px]">{poi.name}</text>
+                      </g>
+                    ))}
+                  </>
+                )}
+              </svg>
+            </div>
           </div>
 
-          {/* Grid pattern */}
-          <svg className="w-full h-full" viewBox="0 0 450 380" preserveAspectRatio="xMidYMid meet">
-            <defs>
-              <pattern id="dotGrid" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
-                <circle cx="1" cy="1" r="1" className="fill-muted-foreground/20" />
-              </pattern>
-            </defs>
-            <rect width="450" height="380" fill="url(#dotGrid)" />
-
-            {/* Zones */}
-            {layers.zones && zones.map(zone => {
-              const pts = zone.polygon.map(p => `${p.x},${p.y}`).join(' ');
-              const fill = zone.type === 'RESTRICTED' ? 'rgba(239,68,68,0.15)' : zone.type === 'MAINTENANCE' ? 'rgba(168,85,247,0.15)' : zone.type === 'CONGESTED' ? 'rgba(234,179,8,0.15)' : 'rgba(249,115,22,0.15)';
-              const stroke = zone.type === 'RESTRICTED' ? '#ef4444' : zone.type === 'MAINTENANCE' ? '#a855f7' : zone.type === 'CONGESTED' ? '#eab308' : '#f97316';
-              return (
-                <g key={zone.id}>
-                  <polygon
-                    points={pts}
-                    fill={zone.active ? fill : 'none'}
-                    stroke={stroke}
-                    strokeWidth="2"
-                    strokeDasharray={zone.active ? '' : '6 4'}
-                    opacity={zone.active ? 1 : 0.4}
-                  />
-                  <text x={zone.polygon[0].x + 5} y={zone.polygon[0].y - 5} className="fill-muted-foreground text-[8px] font-bold">{zone.name}</text>
-                </g>
-              );
-            })}
-
-            {/* Routes */}
-            {layers.routes && robots.filter(r => r.currentTarget).map(robot => (
-              <line
-                key={`route-${robot.id}`}
-                x1={robot.position.x}
-                y1={robot.position.y}
-                x2={robot.position.x + 50}
-                y2={robot.position.y - 30}
-                stroke="hsl(239,84%,67%)"
-                strokeWidth="1.5"
-                strokeDasharray="4 4"
-                opacity="0.5"
-              />
-            ))}
-
-            {/* Robot markers */}
-            {layers.robots && robots.map(robot => {
-              const isSelected = robot.id === selectedRobotId;
-              const fill = robot.status === 'E_STOP' ? '#ef4444'
-                : robot.status === 'HEADING_MAINTENANCE' || robot.status === 'HEADING_STATION' ? '#f59e0b'
-                : robot.status === 'MOVING' ? '#3b82f6'
-                : robot.status === 'CHARGING' ? '#6366f1'
-                : '#94a3b8';
-              return (
-                <g
-                  key={robot.id}
-                  className="cursor-pointer"
-                  onClick={() => selectRobot(robot.id === selectedRobotId ? null : robot.id)}
-                >
-                  {isSelected && <circle cx={robot.position.x} cy={robot.position.y} r="18" fill="none" stroke={fill} strokeWidth="2" opacity="0.4">
-                    <animate attributeName="r" from="14" to="22" dur="1.5s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" from="0.4" to="0" dur="1.5s" repeatCount="indefinite" />
-                  </circle>}
-                  {robot.status === 'E_STOP' && <circle cx={robot.position.x} cy={robot.position.y} r="14" fill={fill} opacity="0.2">
-                    <animate attributeName="opacity" from="0.3" to="0" dur="1s" repeatCount="indefinite" />
-                  </circle>}
-                  <circle cx={robot.position.x} cy={robot.position.y} r="8" fill={fill} stroke="white" strokeWidth="2" />
-                  <text x={robot.position.x} y={robot.position.y - 14} textAnchor="middle" className="fill-foreground text-[8px] font-bold">{robot.id}</text>
-                </g>
-              );
-            })}
-
-            {/* Destinations */}
-            {layers.destinations && (
-              <>
-                {[{ name: 'Zara Store', x: 170, y: 50 }, { name: 'Nike', x: 80, y: 190 }, { name: 'Apple Store', x: 340, y: 100 }, { name: 'Starbucks', x: 200, y: 260 }].map(poi => (
-                  <g key={poi.name}>
-                    <rect x={poi.x - 3} y={poi.y - 3} width="6" height="6" rx="1" className="fill-primary" />
-                    <text x={poi.x + 8} y={poi.y + 3} className="fill-muted-foreground text-[7px]">{poi.name}</text>
-                  </g>
-                ))}
-              </>
-            )}
-          </svg>
-
-          {/* Robot cards bottom scroll */}
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background/80 to-transparent">
-            <div className="flex gap-4 overflow-x-auto pb-2">
+          {/* Robot Cards — below map */}
+          <div className="border-t border-border bg-card/50 shrink-0">
+            <div className="flex gap-3 overflow-x-auto px-4 py-3">
               {robots.map(robot => (
                 <div
                   key={robot.id}
-                  onClick={() => selectRobot(robot.id)}
-                  className={`bg-card rounded-2xl p-4 shadow-sm border shrink-0 w-56 cursor-pointer transition-all hover:shadow-md ${
+                  onClick={() => selectRobot(robot.id === selectedRobotId ? null : robot.id)}
+                  className={`bg-card rounded-2xl p-3 shadow-sm border shrink-0 w-52 cursor-pointer transition-all hover:shadow-md ${
                     robot.id === selectedRobotId ? 'border-primary ring-2 ring-primary/20' : 'border-border'
                   }`}
                 >
@@ -199,7 +323,7 @@ export default function FleetMapPage() {
                     {robot.mode && <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${modeBadge[robot.mode]}`}>{robot.mode}</span>}
                     <span className="text-xs text-muted-foreground">{robot.battery}%</span>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-xs text-muted-foreground mt-1 truncate">
                     {statusLabel[robot.status] || robot.status}
                     {robot.currentTarget && ` → ${robot.currentTarget}`}
                     {robot.eta ? ` (${robot.eta}s)` : ''}
@@ -212,7 +336,7 @@ export default function FleetMapPage() {
 
         {/* Detail Panel */}
         {selectedRobot && (
-          <div className="w-96 border-l border-border bg-card p-6 overflow-y-auto">
+          <div className="w-96 border-l border-border bg-card p-6 overflow-y-auto shrink-0">
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h3 className="text-2xl font-bold text-foreground">{selectedRobot.id}</h3>

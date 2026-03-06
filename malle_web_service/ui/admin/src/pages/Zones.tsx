@@ -212,6 +212,8 @@ export default function ZonesPage() {
                 <circle cx="1" cy="1" r="1" className="fill-muted-foreground/20" />
               </pattern>
             </defs>
+
+            <image href="/map_end_end.png" x="0" y="0" width="450" height="380" preserveAspectRatio="xMidYMid meet" opacity="0.85" />
             <rect width="450" height="380" fill="url(#zoneGrid)" />
 
             {/* Existing zones */}
