@@ -52,18 +52,26 @@ async def receive_frame(robot_id: int, request: Request):
     return {"ok": True}
 
 
+NO_FRAME_TIMEOUT = 10.0
+
+
 async def _mjpeg_gen(robot_id: int):
     """버퍼에 쌓인 프레임을 MJPEG 형식으로 무한 생성."""
     min_interval = 1.0 / STREAM_MAX_FPS
     loop = asyncio.get_event_loop()
+    no_frame_since = loop.time()
 
     while True:
         t0 = loop.time()
         frame = await frame_store.get(robot_id)
 
         if frame is None:
+            if loop.time() - no_frame_since > NO_FRAME_TIMEOUT:
+                return
             await asyncio.sleep(0.5)
             continue
+
+        no_frame_since = loop.time()
 
         yield (
             b"--frame\r\n"
