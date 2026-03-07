@@ -36,6 +36,8 @@ class Poi(Base):
     )
     approach_x_m: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
     approach_y_m: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
+    map_x_m: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
+    map_y_m: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
     # relationships

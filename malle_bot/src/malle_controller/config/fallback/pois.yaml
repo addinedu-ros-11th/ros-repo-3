@@ -3,22 +3,34 @@
 # poi_manager.py 의 _load_fallback() 참고.
 
 pois:
-  - {id: p0,  name: "P0",  x: 0.391, y: 0.351, yaw: 0.0}
-  - {id: p1,  name: "P1",  x: 0.391, y: 0.845, yaw: 0.0}
-  - {id: p2,  name: "P2",  x: 0.396, y: 1.846, yaw: 0.0}
-  - {id: p3,  name: "P3",  x: 1.200, y: 1.746, yaw: 0.0}
-  - {id: p4,  name: "P4",  x: 1.199, y: 0.850, yaw: 0.0}
-  - {id: p5,  name: "P5",  x: 1.650, y: 0.850, yaw: 0.0}
-  - {id: p6,  name: "P6",  x: 2.074, y: 0.856, yaw: 0.0}
-  - {id: p7,  name: "P7",  x: 1.243, y: 1.400, yaw: 0.0}
-  - {id: p8,  name: "P8",  x: 2.100, y: 0.247, yaw: 0.0}
-  - {id: p9,  name: "P9",  x: 2.397, y: 0.254, yaw: 0.0}
-  - {id: p10, name: "P10", x: 2.388, y: 1.297, yaw: 0.0}
-  - {id: p11, name: "P11", x: 1.804, y: 1.821, yaw: 0.0}
-  - {id: p12, name: "P12", x: 0.917, y: 0.300, yaw: 0.0}
-  - {id: p13, name: "P13", x: 0.917, y: 0.845, yaw: 0.0}
-  - {id: p14, name: "P14", x: 1.199, y: 0.300, yaw: 0.0}
-  - {id: p15, name: "P15", x: 2.000, y: 1.400, yaw: 0.0}
-  - {id: p16, name: "P16", x: 1.800, y: 0.300, yaw: 0.0}
-  - {id: charger1, name: "충전기 1", x: 0.250, y: 0.650, yaw: 0.0}
-  - {id: charger2, name: "충전기 2", x: 0.450, y: 0.650, yaw: 0.0}
+  # STATION
+  - {id: 1,  name: "Station_1",  type: STATION,   x: 0.180, y: 0.150, yaw: 0.0}
+  - {id: 2,  name: "Station_2",  type: STATION,   x: 0.360, y: 0.150, yaw: 0.0}
+  - {id: 3,  name: "Station_3",  type: STATION,   x: 0.540, y: 0.150, yaw: 0.0}
+
+  # CHARGER
+  - {id: 4,  name: "Charger_1",  type: CHARGER,   x: 1.040, y: 0.200, yaw: 0.0}
+  - {id: 5,  name: "Charger_2",  type: CHARGER,   x: 1.865, y: 0.200, yaw: 0.0}
+  - {id: 6,  name: "Charger_3",  type: CHARGER,   x: 1.400, y: 1.850, yaw: 0.0}
+  - {id: 7,  name: "Charger_4",  type: CHARGER,   x: 0.550, y: 1.850, yaw: 0.0}
+  - {id: 8,  name: "Charger_5",  type: CHARGER,   x: 0.274, y: 1.015, yaw: 0.0}
+
+  # FACILITY
+  - {id: 9,  name: "Maintenance", type: FACILITY,  x: 2.347, y: 0.450, yaw: 0.0}
+  - {id: 10, name: "Fountain",    type: FACILITY,  x: 1.027, y: 0.707, yaw: 0.0}
+  - {id: 11, name: "Lounge",      type: FACILITY,  x: 1.105, y: 1.161, yaw: 0.0}
+
+  # STORE
+  - {id: 12, name: "Pop-up",      type: STORE,     x: 1.551, y: 1.093, yaw: 0.0}
+  - {id: 13, name: "Vendor",      type: STORE,     x: 1.701, y: 0.419, yaw: 0.0}
+  - {id: 14, name: "Starbucks",   type: STORE,     x: 2.315, y: 1.424, yaw: 0.0}
+  - {id: 15, name: "Top10",       type: STORE,     x: 0.755, y: 0.307, yaw: 0.0}
+  - {id: 16, name: "Dior",        type: STORE,     x: 0.274, y: 0.815, yaw: 0.0}
+  - {id: 17, name: "8 Seconds",   type: STORE,     x: 1.325, y: 0.307, yaw: 0.0}
+  - {id: 18, name: "올리브영",    type: STORE,     x: 1.167, y: 1.800, yaw: 0.0}
+  - {id: 19, name: "ABC마트",     type: STORE,     x: 1.637, y: 1.800, yaw: 0.0}
+  - {id: 20, name: "바비",        type: STORE,     x: 0.287, y: 1.800, yaw: 0.0}
+  - {id: 21, name: "노스페이스",  type: STORE,     x: 1.595, y: 0.307, yaw: 0.0}
+  - {id: 22, name: "하이마트",    type: STORE,     x: 2.105, y: 0.307, yaw: 0.0}
+  - {id: 23, name: "이케아",      type: STORE,     x: 0.857, y: 1.800, yaw: 0.0}
+  - {id: 24, name: "티파니",      type: STORE,     x: 0.274, y: 1.335, yaw: 0.0}

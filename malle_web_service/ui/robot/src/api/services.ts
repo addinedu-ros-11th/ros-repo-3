@@ -83,6 +83,8 @@ export interface PoiRes {
   type: string;
   x_m: number;
   y_m: number;
+  map_x_m: number | null;
+  map_y_m: number | null;
   wait_x_m: number | null;
   wait_y_m: number | null;
 }

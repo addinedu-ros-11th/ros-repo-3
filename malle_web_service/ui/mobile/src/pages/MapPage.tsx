@@ -6,9 +6,11 @@ import { VoiceCommandPanel } from '@/components/voice/VoiceCommandPanel';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 // 맵 물리 크기 (미터)
-const MAP_WIDTH_M  = 2.45;
+const MAP_WIDTH_M  = 2.5;
 const MAP_HEIGHT_M = 2.0;
-const MAP_OFFSET   = { left: 3.85, top: 4.65, right: 95.96, bottom: 95.12 };
+const MAP_DB_MIN_X = 0.1;   // DB 좌표 최솟값
+const MAP_DB_MIN_Y = 0.1;
+const MAP_OFFSET = { left: 3.8462, top: 4.6512, right: 96.0385, bottom: 95.1163 };
 
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
@@ -16,8 +18,11 @@ const MAX_SCALE = 6;
 function toMapPercent(x_m: number, y_m: number) {
   const innerW = MAP_OFFSET.right  - MAP_OFFSET.left;
   const innerH = MAP_OFFSET.bottom - MAP_OFFSET.top;
-  const left = MAP_OFFSET.left + (x_m / MAP_WIDTH_M)                   * innerW;
-  const top  = MAP_OFFSET.top  + ((MAP_HEIGHT_M - y_m) / MAP_HEIGHT_M) * innerH;
+  // DB 좌표를 흰색 영역 내 비율로 변환 (0.1~2.5 → 0~1)
+  const ratioX = (x_m - MAP_DB_MIN_X) / (MAP_WIDTH_M  - MAP_DB_MIN_X);
+  const ratioY = (y_m - MAP_DB_MIN_Y) / (MAP_HEIGHT_M - MAP_DB_MIN_Y);
+  const left = MAP_OFFSET.left + ratioX * innerW;
+  const top  = MAP_OFFSET.top  + (1 - ratioY) * innerH;  // y축 반전
   return {
     left: `${Math.min(Math.max(left, 0), 100)}%`,
     top:  `${Math.min(Math.max(top,  0), 100)}%`,
@@ -243,7 +248,7 @@ export default function MapPage() {
               <div
                 className="relative rounded-2xl overflow-hidden border-2 border-border/60 shadow-xl"
                 style={{
-                  aspectRatio: '2.45 / 2',
+                  aspectRatio: '520 / 430',
                   width: '100%',
                   maxWidth: '380px',
                   maxHeight: 'calc(100vh - 200px)',
@@ -263,7 +268,7 @@ export default function MapPage() {
 
                 {/* ── POI 마커 ── */}
                 {pois.map((poi) => {
-                  const pos = toMapPercent(poi.x, poi.y);
+                  const pos = toMapPercent(poi.map_x ?? poi.x, poi.map_y ?? poi.y);
                   return (
                     <Tooltip key={poi.id}>
                       <TooltipTrigger asChild>
@@ -322,9 +327,10 @@ export default function MapPage() {
                 )}
 
                 {/* ── 좌표 확인용 임시 마커 ── */}
-                {[
-                  { label: '(0,0)',    x: 0,    y: 0 },
-                  { label: '(2.45,2)', x: 2.45, y: 2 },
+                {/* {[
+                  { label: '(0.1,0.1)',    x: 0.1,    y: 0.1 },
+                  { label: '(2.5,2.0)', x: 2.5, y: 2.0 },
+                  { label: '(1.25,1.0)', x: 1.25, y: 1.0 },
                 ].map(({ label, x, y }) => (
                   <div
                     key={label}
@@ -336,7 +342,7 @@ export default function MapPage() {
                       {label}
                     </span>
                   </div>
-                ))}
+                ))} */}
 
                 {/* 좌표 원점 */}
                 <div className="absolute bottom-1.5 left-1.5 w-1.5 h-1.5 rounded-full bg-muted-foreground/40" />
