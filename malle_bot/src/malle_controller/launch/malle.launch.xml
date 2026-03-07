@@ -9,6 +9,7 @@
   <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
         output="screen">
     <param name="robot_id" value="$(var robot_id)"/>
+    <param name="api_base_url" value="$(var api_base_url)"/>
   </node>
 
   <!-- ===== mission_guide  –  가이드 모드 ===== -->
