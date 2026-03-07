@@ -466,17 +466,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   startGuide: () => {
-    set((s) => {
-      const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
-      if (!f) return s;
-      return {
-        guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i),
-        robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null,
-      };
-    });
-    const { currentSessionId } = get();
-    if (currentSessionId) guideApi.execute(currentSessionId).catch(() => {});
-  },
+      set((s) => {
+        const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
+        if (!f) return s;
+        return {
+          guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i),
+          robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null,
+        };
+      });
+      const { currentSessionId } = get();
+      if (currentSessionId) {
+        guideApi.execute(currentSessionId)
+          .then((res) => console.log('[Guide] execute OK:', res))  // ← 추가
+          .catch((e) => console.error('[Guide] execute FAIL:', e)); // ← 추가
+      }
+    },
 
   completeCurrentGuide: () => set((s) => {
     const cur = s.guideQueue.find((i) => i.status === 'IN_PROGRESS');
