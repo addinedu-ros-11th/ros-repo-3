@@ -57,9 +57,14 @@ class RobotState(Enum):
 
 class MissionExecutor(Node, NavCore):
 
-    def __init__(self, api_base_url: str = 'http://localhost:8000'):
+    # 1. 인자(api_base_url) 제거
+    def __init__(self):
         Node.__init__(self, 'mission_executor')
         self.nav_core_init(self)
+
+        # 2. ROS 2 파라미터 선언 및 읽어오기 추가
+        self.declare_parameter('api_base_url', 'http://localhost:8000/api/v1')
+        api_base_url = self.get_parameter('api_base_url').value
 
         self.state           = RobotState.IDLE
         self.robot_id        = 'malle_01'
@@ -67,9 +72,11 @@ class MissionExecutor(Node, NavCore):
         self.current_task_id = ''
         self._poi_ids        = ''
 
+        # 3. 읽어온 api_base_url 적용
         self._api     = ApiClient(base_url=api_base_url, logger=self.get_logger())
         self._poi_mgr = PoiManager(self._api, logger=self.get_logger())
         self._poi_mgr.load()
+        
 
         self._guide = GuideExecutor(self, self._api, self._poi_mgr)
         # TODO: self._follow = FollowExecutor(...)
