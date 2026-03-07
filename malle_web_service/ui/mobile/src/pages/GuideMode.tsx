@@ -29,6 +29,8 @@ export default function GuideMode() {
   const canStart = selectedCount > 0;
 
   const handleStartGuide = () => {
+    const s = useAppStore.getState();
+    console.log('SESSION_ID:', s.currentSessionId, 'STATE:', s.sessionState);
     startGuide();
     navigate('/mode/guide/active');
   };
