@@ -26,7 +26,7 @@ from app.models.poi import Poi, PoiType, PoiArrivalConfirm
 from app.models.store import Store
 from app.models.product import Product
 from app.models.lockbox import LockboxSlot, LockboxSlotStatus
-from app.models.zone import RestrictedZone
+from app.models.zone import Zone, ZoneType, ZonePriority
 from app.models.congestion import CongestionCurrent, CongestionLevel
 from app.models.charger import ChargerCurrent, ChargerStatus
 
@@ -170,27 +170,33 @@ async def seed():
         await db.flush()
         print(f"  ✓ Lockbox slots: {len(lockbox_slots)}")
 
-        # --- Restricted Zones ---
-        zones = [
-            RestrictedZone(
-                name="North Corridor",
-                polygon_wkt="POLYGON((50 30, 250 30, 250 80, 50 80, 50 30))",
-                is_active=True,
-            ),
-            RestrictedZone(
-                name="Food Court Area",
-                polygon_wkt="POLYGON((320 270, 400 270, 400 340, 320 340, 320 270))",
-                is_active=True,
-            ),
-            RestrictedZone(
-                name="West Wing",
-                polygon_wkt="POLYGON((150 200, 280 200, 280 280, 150 280, 150 200))",
-                is_active=False,
-            ),
+        # --- Zones ---
+        # polygon 은 맵 좌표계(m) 기준. ST_GeomFromText 로 삽입해야 하므로
+        # 여기서는 text() 쿼리로 직접 삽입한다.
+        now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+        # (name, zone_type, priority, is_active, speed_limit_mps, one_way, enhanced_avoidance, wkt)
+        zone_rows = [
+            ("North Corridor",  "RESTRICTED", "HIGH",   True,  None, None,  None,  "POLYGON((50 30, 250 30, 250 80, 50 80, 50 30))"),
+            ("Food Court Area", "RESTRICTED", "MEDIUM", True,  None, None,  None,  "POLYGON((320 270, 400 270, 400 340, 320 340, 320 270))"),
+            ("West Wing",       "CAUTION",    "LOW",    False, 0.3,  False, None,  "POLYGON((150 200, 280 200, 280 280, 150 280, 150 200))"),
+            # PID 구간 임시 점유용 — 평소 비활성, 로봇 진입 시 is_active=True 로 토글
+            # ※ polygon 좌표는 실제 맵에 맞게 수정 필요 (pid_edges.py 참고)
+            ("pid_lock_p4", "RESTRICTED", "HIGH", False, None, None, None, "POLYGON((1.0 -0.23, 2.06 -0.23, 2.06 0.83, 1.0 0.83, 1.0 -0.23))"),
+            ("pid_lock_p6", "RESTRICTED", "HIGH", False, None, None, None, "POLYGON((2.98 0.98, 4.02 0.98, 4.02 2.02, 2.98 2.02, 2.98 0.98))"),
+            ("pid_lock_p8", "RESTRICTED", "HIGH", False, None, None, None, "POLYGON((2.80 1.50, 4.20 1.50, 4.20 2.90, 2.80 2.90, 2.80 1.50))"),
         ]
-        db.add_all(zones)
+        for name, ztype, priority, is_active, speed_limit, one_way, enhanced, wkt in zone_rows:
+            await db.execute(text(
+                "INSERT INTO zones "
+                "(name, zone_type, priority, is_active, speed_limit_mps, one_way, enhanced_avoidance, "
+                " polygon, updated_by_source, updated_at, created_at) "
+                "VALUES (:name, :ztype, :priority, :is_active, :speed, :one_way, :enhanced, "
+                "        ST_GeomFromText(:wkt), 'seed', :now, :now)"
+            ), {"name": name, "ztype": ztype, "priority": priority, "is_active": is_active,
+                "speed": speed_limit, "one_way": one_way, "enhanced": enhanced,
+                "wkt": wkt, "now": now_str})
         await db.flush()
-        print(f"  ✓ Restricted zones: {len(zones)}")
+        print(f"  ✓ Zones: {len(zone_rows)} (pid_lock 3개 포함)")
 
         # --- Chargers ---
         chargers = [
