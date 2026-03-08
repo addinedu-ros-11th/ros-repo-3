@@ -44,7 +44,7 @@ export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
   const [missionType, setMissionType] = useState<TaskMissionType>('GUIDE');
   const [selectedPoi, setSelectedPoi] = useState<POI | null>(null);
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
-  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number }[]>([]);
+  const [selectedItems, setSelectedItems] = useState<{ name: string; quantity: number; price: number; productId?: number }[]>([]);
   const [poiSearch, setPoiSearch] = useState('');
 
   const resetWizard = () => {
