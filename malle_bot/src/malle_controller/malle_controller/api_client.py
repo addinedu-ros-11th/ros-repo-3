@@ -26,6 +26,7 @@ class ApiClient:
         self._base    = base_url.rstrip('/')
         self._timeout = timeout
         self._log     = logger
+        self._pid_zone_cache: dict[str, int] = {}  # poi_id → zone_id 캐시
 
     # ── 기본 HTTP 메서드 ─────────────────────────────────────────────────────
 
@@ -110,6 +111,35 @@ class ApiClient:
     def list_zones(self) -> list[dict]:
         """GET /zones"""
         return self.get('/zones')
+
+    def find_pid_lock_zone_id(self, poi_id: str) -> int | None:
+        """
+        name=pid_lock_{poi_id} 인 zone의 id 반환.
+        결과는 프로세스 생존 기간 동안 캐시 (zone_id 는 불변).
+        """
+        if poi_id in self._pid_zone_cache:
+            return self._pid_zone_cache[poi_id]
+        try:
+            zones = self.get('/zones')
+            target = f'pid_lock_{poi_id}'
+            for z in zones:
+                if z.get('name') == target:
+                    self._pid_zone_cache[poi_id] = z['id']
+                    return z['id']
+        except Exception as e:
+            if self._log:
+                self._log.warn(f'[ApiClient] pid_lock zone 조회 실패: {e}')
+        return None
+
+    def set_zone_active(self, zone_id: int, active: bool):
+        """PATCH /zones/{id} — is_active 토글. 예외는 삼킨다."""
+        try:
+            self.patch(f'/zones/{zone_id}', {'is_active': active})
+        except Exception as e:
+            if self._log:
+                self._log.warn(
+                    f'[ApiClient] zone 토글 실패 (id={zone_id} active={active}): {e}'
+                )
 
     # ── Events ───────────────────────────────────────────────────────────────
 

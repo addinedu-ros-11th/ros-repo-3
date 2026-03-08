@@ -11,6 +11,7 @@ SCRIPTS = [
     "test_lockbox.py",
     "test_pois_stores.py",
     "test_zones_events.py",
+    "test_pid_zone_lock.py",
 ]
 
 tests_dir = Path(__file__).parent
