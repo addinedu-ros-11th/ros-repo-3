@@ -403,6 +403,14 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       ));
     }, []),
 
+    onRouteUpdated: useCallback((robotId: number, route: Array<{ wp_id: string; x: number; y: number }>) => {
+      const rid = `R-${robotId}`;
+      setRobots(prev => prev.map(r => r.id === rid
+        ? { ...r, route: route.length > 0 ? route : null }
+        : r
+      ));
+    }, []),
+
     onFollowStarted: useCallback((data: Record<string, any>) => {
       setEvents(prev => [{
         id: `E-flw-${Date.now()}`,
