@@ -81,7 +81,7 @@ function getConfirmMessage(action: PendingAction): string {
 export default function FleetMapPage() {
   const { robots, zones, pois, selectedRobotId, selectRobot, triggerEStop, releaseEStop, startTeleop, sendToMaintenance, returnToStation } = useDashboard();
   const navigate = useNavigate();
-  const [layers, setLayers] = useState({ robots: true, routes: true, zones: true, destinations: true, waypoints: false }); // ★ CHANGED — waypoints 추가 (기본 off)
+  const [layers, setLayers] = useState({ robots: true, routes: true, zones: true, destinations: true, waypoints: true });
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [hoveredWaypoint, setHoveredWaypoint] = useState<string | null>(null); // ★ NEW
   const selectedRobot = robots.find(r => r.id === selectedRobotId);
@@ -275,7 +275,7 @@ export default function FleetMapPage() {
                       <circle
                         cx={x} cy={y}
                         r={isHovered ? 5 : 3.5}
-                        fill={isCharger ? '#f59e0b' : '#ef4444'}
+                        fill={isCharger ? '#ef4444' : '#ef4444'}
                         stroke="white"
                         strokeWidth="1"
                         opacity={isHovered ? 1 : 0.8}
