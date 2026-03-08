@@ -2,7 +2,6 @@
 
 from datetime import datetime, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -22,6 +21,7 @@ from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count, get_occupied_poi_ids
 from app.config import BRIDGE_BASE_URL
+from app.utils.bridge import register_bridge_url, send_to_bridge
 
 router = APIRouter()
 
@@ -123,6 +123,9 @@ async def update_robot_state(
     state.updated_at = now
     robot.last_seen_at = now
 
+    if req.bridge_url:
+        register_bridge_url(robot_id, req.bridge_url)
+
     await db.flush()
 
     # OCCUPIED → 비점유 전환: 같은 POI를 대기 중인 다음 세션 자동 실행
@@ -162,6 +165,23 @@ async def update_robot_state(
         "state": state_data,
         "battery_pct": robot.battery_pct,
     })
+
+    await manager.send_to_robot(robot_id, WsEvent.ROBOT_STATE_UPDATED, {
+        "battery_pct": robot.battery_pct,
+    })
+
+    from app.models.session import Session, SessionStatus as SS
+    active_sess_result = await db.execute(
+        select(Session).where(
+            Session.assigned_robot_id == robot_id,
+            Session.status.in_([SS.APPROACHING, SS.MATCHING, SS.ACTIVE]),
+        )
+    )
+    active_session = active_sess_result.scalar_one_or_none()
+    if active_session:
+        await manager.send_to_mobile(active_session.id, WsEvent.ROBOT_STATE_UPDATED, {
+            "battery_pct": robot.battery_pct,
+        })
 
     return robot
 
@@ -268,16 +288,7 @@ async def send_command(
         raise HTTPException(status_code=400, detail=f"Invalid command. Valid: {valid_commands}")
 
     # Forward command to ROS2 via bridge_node
-    bridge_ok = False
-    try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.post(
-                f"http://localhost:9100/bridge/command",
-                json={"robot_id": robot_id, "command": req.command},
-            )
-            bridge_ok = resp.status_code == 200
-    except (httpx.ConnectError, httpx.TimeoutException):
-        pass  # bridge_node offline — command still recorded in DB
+    bridge_ok = await send_to_bridge("command", {"robot_id": robot_id, "command": req.command})
 
     if req.command == "return_station":
         robot.current_mode = RobotMode.IDLE

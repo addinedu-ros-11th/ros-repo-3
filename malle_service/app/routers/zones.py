@@ -1,134 +1,243 @@
-"""Zone management endpoints (dashboard)."""
+"""Zone management endpoints (dashboard).
+
+단일 zones 테이블 기반 CRUD.
+변경 발생 시 WS ZONE_UPDATED 이벤트를 모든 로봇 + 대시보드에 broadcast.
+
+WS payload 포맷:
+  {
+    "type": "ZONE_UPDATED",
+    "payload": {
+      "action": "created" | "updated" | "deleted",
+      "zone": { ...zone fields... }   # deleted 시에는 {"id": <id>}
+    }
+  }
+
+로봇 zone_manager.py 의 _apply_patch() 가 이 payload 를 수신해 처리.
+"""
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.zone import RestrictedZone, NavRuleZone, NavRuleType
+from app.models.zone import Zone, ZoneType, ZonePriority
+from app.ws.events import WsEvent
+from app.ws.manager import manager
 
 router = APIRouter()
 
 
+# ---------------------------------------------------------------------------
+# Request / Response schemas
+# ---------------------------------------------------------------------------
+
 class ZoneCreateRequest(BaseModel):
     name: str
-    polygon_wkt: str
-    zone_kind: str = "restricted"  # "restricted" or "nav_rule"
+    zone_type: ZoneType
+    polygon_wkt: str                         # "POLYGON((x1 y1, x2 y2, ...))"
     is_active: bool = True
-    rule_type: NavRuleType | None = None
-    speed_limit_mps: float | None = None
-    corner_stop_ms: int | None = None
+    priority: ZonePriority = ZonePriority.MEDIUM
+    speed_limit_mps: float | None = None     # CAUTION / CONGESTED
+    one_way: bool | None = None              # CAUTION
+    enhanced_avoidance: bool | None = None   # CONGESTED
 
 
 class ZoneUpdateRequest(BaseModel):
     name: str | None = None
+    zone_type: ZoneType | None = None
     polygon_wkt: str | None = None
     is_active: bool | None = None
+    priority: ZonePriority | None = None
     speed_limit_mps: float | None = None
-    corner_stop_ms: int | None = None
+    one_way: bool | None = None
+    enhanced_avoidance: bool | None = None
 
 
-class ZoneResponse(BaseModel):
-    id: int
-    name: str
-    polygon_wkt: str
-    is_active: bool
-    zone_kind: str = "restricted"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    model_config = {"from_attributes": True}
+def _zone_to_dict(zone_id: int, name: str, zone_type, polygon_wkt: str,
+                  is_active: bool, priority, speed_limit_mps,
+                  one_way, enhanced_avoidance) -> dict:
+    return {
+        "id": zone_id,
+        "name": name,
+        "zone_type": zone_type.value if hasattr(zone_type, "value") else zone_type,
+        "polygon_wkt": polygon_wkt,
+        "is_active": is_active,
+        "priority": priority.value if hasattr(priority, "value") else priority,
+        "speed_limit_mps": float(speed_limit_mps) if speed_limit_mps is not None else None,
+        "one_way": one_way,
+        "enhanced_avoidance": enhanced_avoidance,
+    }
 
+
+async def _broadcast_zone_event(action: str, zone_dict: dict):
+    """Send ZONE_UPDATED to all robots and dashboards."""
+    payload = {"action": action, "zone": zone_dict}
+    # All robots
+    for robot_id in list(manager.robot_connections.keys()):
+        await manager.send_to_robot(robot_id, WsEvent.ZONE_UPDATED, payload)
+    # All dashboards
+    await manager.send_to_dashboard(WsEvent.ZONE_UPDATED, payload)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @router.get("/zones")
 async def list_zones(db: AsyncSession = Depends(get_db)):
-    """List all zones (restricted + nav_rule)."""
-    restricted = await db.execute(select(RestrictedZone).order_by(RestrictedZone.id))
-    nav_rules = await db.execute(select(NavRuleZone).order_by(NavRuleZone.id))
+    """List all zones."""
+    rows = await db.execute(
+        select(
+            Zone.id,
+            Zone.name,
+            Zone.zone_type,
+            func.ST_AsText(Zone.polygon).label("polygon_wkt"),
+            Zone.is_active,
+            Zone.priority,
+            Zone.speed_limit_mps,
+            Zone.one_way,
+            Zone.enhanced_avoidance,
+        ).order_by(Zone.id)
+    )
 
-    result = []
-    for z in restricted.scalars().all():
-        result.append({
-            "id": z.id, "name": z.name, "polygon_wkt": z.polygon_wkt,
-            "is_active": z.is_active, "zone_kind": "restricted",
-        })
-    for z in nav_rules.scalars().all():
-        result.append({
-            "id": z.id, "name": z.name, "polygon_wkt": z.polygon_wkt,
-            "is_active": z.is_active, "zone_kind": "nav_rule",
-            "rule_type": z.rule_type.value, "speed_limit_mps": float(z.speed_limit_mps) if z.speed_limit_mps else None,
-        })
-
-    return result
+    return [
+        _zone_to_dict(
+            r["id"], r["name"], r["zone_type"], r["polygon_wkt"],
+            r["is_active"], r["priority"], r["speed_limit_mps"],
+            r["one_way"], r["enhanced_avoidance"],
+        )
+        for r in rows.mappings().all()
+    ]
 
 
 @router.post("/zones")
 async def create_zone(req: ZoneCreateRequest, db: AsyncSession = Depends(get_db)):
-    """Create a new zone."""
+    """Create a new zone and notify robots."""
     now = datetime.utcnow()
 
-    if req.zone_kind == "nav_rule":
-        if not req.rule_type:
-            raise HTTPException(status_code=400, detail="rule_type required for nav_rule zones")
-        zone = NavRuleZone(
-            name=req.name, polygon_wkt=req.polygon_wkt, is_active=req.is_active,
-            rule_type=req.rule_type, speed_limit_mps=req.speed_limit_mps,
-            corner_stop_ms=req.corner_stop_ms, updated_at=now,
-        )
-    else:
-        zone = RestrictedZone(
-            name=req.name, polygon_wkt=req.polygon_wkt,
-            is_active=req.is_active, updated_at=now,
-        )
-
+    zone = Zone(
+        name=req.name,
+        zone_type=req.zone_type,
+        polygon=func.ST_GeomFromText(req.polygon_wkt),
+        is_active=req.is_active,
+        priority=req.priority,
+        speed_limit_mps=req.speed_limit_mps,
+        one_way=req.one_way,
+        enhanced_avoidance=req.enhanced_avoidance,
+        updated_at=now,
+        created_at=now,
+    )
     db.add(zone)
     await db.flush()
-    await db.refresh(zone)
 
-    return {"ok": True, "id": zone.id, "zone_kind": req.zone_kind}
+    # Re-read polygon_wkt for broadcast
+    wkt_row = await db.execute(
+        select(func.ST_AsText(Zone.polygon)).where(Zone.id == zone.id)
+    )
+    polygon_wkt = wkt_row.scalar() or req.polygon_wkt
+
+    zone_dict = _zone_to_dict(
+        zone.id, zone.name, zone.zone_type, polygon_wkt,
+        zone.is_active, zone.priority, zone.speed_limit_mps,
+        zone.one_way, zone.enhanced_avoidance,
+    )
+    await _broadcast_zone_event("created", zone_dict)
+
+    return {"ok": True, "id": zone.id}
 
 
 @router.patch("/zones/{zone_id}")
 async def update_zone(zone_id: int, req: ZoneUpdateRequest, db: AsyncSession = Depends(get_db)):
-    """Update zone."""
-    zone = await db.get(RestrictedZone, zone_id)
-    if not zone:
-        zone = await db.get(NavRuleZone, zone_id)
+    """Update zone fields and notify robots."""
+    zone = await db.get(Zone, zone_id)
     if not zone:
         raise HTTPException(status_code=404, detail="Zone not found")
 
     if req.name is not None:
         zone.name = req.name
-    if req.polygon_wkt is not None:
-        zone.polygon_wkt = req.polygon_wkt
+    if req.zone_type is not None:
+        zone.zone_type = req.zone_type
     if req.is_active is not None:
         zone.is_active = req.is_active
+    if req.priority is not None:
+        zone.priority = req.priority
+    if req.speed_limit_mps is not None:
+        zone.speed_limit_mps = req.speed_limit_mps
+    if req.one_way is not None:
+        zone.one_way = req.one_way
+    if req.enhanced_avoidance is not None:
+        zone.enhanced_avoidance = req.enhanced_avoidance
     zone.updated_at = datetime.utcnow()
 
-    if isinstance(zone, NavRuleZone):
-        if req.speed_limit_mps is not None:
-            zone.speed_limit_mps = req.speed_limit_mps
-        if req.corner_stop_ms is not None:
-            zone.corner_stop_ms = req.corner_stop_ms
-
     await db.flush()
+
+    # Polygon update requires ST_GeomFromText (geometry function)
+    if req.polygon_wkt is not None:
+        await db.execute(
+            update(Zone)
+            .where(Zone.id == zone_id)
+            .values(polygon=func.ST_GeomFromText(req.polygon_wkt))
+        )
+
+    # Re-read polygon_wkt for broadcast
+    wkt_row = await db.execute(
+        select(func.ST_AsText(Zone.polygon)).where(Zone.id == zone_id)
+    )
+    polygon_wkt = wkt_row.scalar() or ""
+
+    zone_dict = _zone_to_dict(
+        zone.id, zone.name, zone.zone_type, polygon_wkt,
+        zone.is_active, zone.priority, zone.speed_limit_mps,
+        zone.one_way, zone.enhanced_avoidance,
+    )
+    await _broadcast_zone_event("updated", zone_dict)
+
     return {"ok": True, "id": zone_id}
+
+
+@router.patch("/zones/{zone_id}/toggle")
+async def toggle_zone(zone_id: int, db: AsyncSession = Depends(get_db)):
+    """Toggle zone active state."""
+    zone = await db.get(Zone, zone_id)
+    if not zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
+
+    zone.is_active = not zone.is_active
+    zone.updated_at = datetime.utcnow()
+    await db.flush()
+
+    wkt_row = await db.execute(
+        select(func.ST_AsText(Zone.polygon)).where(Zone.id == zone_id)
+    )
+    polygon_wkt = wkt_row.scalar() or ""
+
+    zone_dict = _zone_to_dict(
+        zone.id, zone.name, zone.zone_type, polygon_wkt,
+        zone.is_active, zone.priority, zone.speed_limit_mps,
+        zone.one_way, zone.enhanced_avoidance,
+    )
+    await _broadcast_zone_event("updated", zone_dict)
+
+    return {"ok": True, "id": zone_id, "is_active": zone.is_active}
 
 
 @router.delete("/zones/{zone_id}")
 async def delete_zone(zone_id: int, db: AsyncSession = Depends(get_db)):
-    """Delete a zone."""
-    zone = await db.get(RestrictedZone, zone_id)
-    if zone:
-        await db.delete(zone)
-        await db.flush()
-        return {"ok": True}
+    """Delete a zone and notify robots."""
+    zone = await db.get(Zone, zone_id)
+    if not zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
 
-    zone = await db.get(NavRuleZone, zone_id)
-    if zone:
-        await db.delete(zone)
-        await db.flush()
-        return {"ok": True}
+    await db.delete(zone)
+    await db.flush()
 
-    raise HTTPException(status_code=404, detail="Zone not found")
+    await _broadcast_zone_event("deleted", {"id": zone_id})
+
+    return {"ok": True}

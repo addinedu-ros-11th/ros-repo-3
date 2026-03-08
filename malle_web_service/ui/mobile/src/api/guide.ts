@@ -33,4 +33,7 @@ export const guideApi = {
 
   clear: (sessionId: number) =>
     api.delete(`/sessions/${sessionId}/guide-queue`),
+
+  advance: (sessionId: number) =>
+    api.post(`/sessions/${sessionId}/guide-queue/advance`),
 };

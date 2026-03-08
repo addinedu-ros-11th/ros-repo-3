@@ -105,16 +105,36 @@ export const zoneApi = {
     name: string;
     polygon_wkt: string;
     is_active: boolean;
-    zone_kind: string;
-    rule_type?: string;
-    speed_limit_mps?: number;
+    zone_type: string;        // zone_kind → zone_type
+    priority: string;
+    speed_limit_mps?: number | null;
+    one_way?: boolean | null;
+    enhanced_avoidance?: boolean | null;
   }>>("/zones"),
 
-  create: (data: { name: string; polygon_wkt: string; zone_kind?: string; is_active?: boolean; rule_type?: string; speed_limit_mps?: number }) =>
-    api.post("/zones", data),
+  create: (data: {
+    name: string;
+    polygon_wkt: string;
+    zone_type: string;        // zone_kind → zone_type
+    is_active?: boolean;
+    priority?: string;
+    speed_limit_mps?: number | null;
+    one_way?: boolean | null;
+    enhanced_avoidance?: boolean | null;
+  }) => api.post("/zones", data),
 
-  update: (zoneId: number, data: { name?: string; polygon_wkt?: string; is_active?: boolean }) =>
-    api.patch(`/zones/${zoneId}`, data),
+  update: (zoneId: number, data: {
+    name?: string;
+    polygon_wkt?: string;
+    zone_type?: string;
+    is_active?: boolean;
+    priority?: string;
+    speed_limit_mps?: number | null;
+    one_way?: boolean | null;
+    enhanced_avoidance?: boolean | null;
+  }) => api.patch(`/zones/${zoneId}`, data),
+
+  toggle: (zoneId: number) => api.patch(`/zones/${zoneId}/toggle`, {}),  // ← 추가
 
   delete: (zoneId: number) => api.delete(`/zones/${zoneId}`),
 };
@@ -125,6 +145,19 @@ export const teleopApi = {
   stop: (robotId: number) => api.post(`/robots/${robotId}/teleop/stop`),
   sendCmd: (robotId: number, linear_x: number, angular_z: number) =>
     api.post(`/robots/${robotId}/teleop/cmd`, { linear_x, angular_z }),
+};
+
+// --- Lockbox ---
+export interface LockboxSlotRes {
+  slot_no: number;
+  status: string;
+  order_id?: number | null;
+  pickup_poi_id?: number | null;
+  store_name?: string | null;
+}
+
+export const lockboxApi = {
+  getSlots: (robotId: number) => api.get<LockboxSlotRes[]>(`/robots/${robotId}/lockbox`),
 };
 
 // --- Sessions (dashboard view) ---

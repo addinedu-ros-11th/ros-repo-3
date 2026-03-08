@@ -38,5 +38,8 @@ class WsEvent:
     MISSION_CREATED = "MISSION_CREATED"
     MISSION_UPDATED = "MISSION_UPDATED"
 
+    # Zone  ← NEW
+    ZONE_UPDATED = "ZONE_UPDATED"
+
     # System
     PONG = "PONG"

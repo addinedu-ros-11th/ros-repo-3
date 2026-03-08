@@ -15,6 +15,8 @@ class PoiResponse(BaseModel):
     type: PoiType
     x_m: float
     y_m: float
+    map_x_m: float | None
+    map_y_m: float | None
     wait_x_m: float | None
     wait_y_m: float | None
     arrival_confirm: PoiArrivalConfirm

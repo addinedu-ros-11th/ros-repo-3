@@ -7,31 +7,45 @@ interface SearchOverlayProps {
   onClose: () => void;
 }
 
-const filterOptions = ['All', 'Apparels', 'Electronics', 'Services', 'Others', 'Dining'];
+const filterOptions = ['All', 'Fashion', 'Beverage', 'Cosmetics', 'Electronics', 'Living', 'Jewelry', 'Kids', 'Other'];
 
 const filterCategoryMap: Record<string, string[]> = {
-  'All': [],
-  'Apparels': ['Fashion & Apparel'],
-  'Electronics': ['Electronics'],
-  'Services': ['Services'],
-  'Others': ['Sports & Outdoor', 'Fitness'],
-  'Dining': ['Dining'],
+  'All':       [],
+  'Fashion':   ['fashion','outdoor','shoes'],
+  'Beverage':  ['beverage'],
+  'Cosmetics': ['cosmetics'],
+  'Electronics':  ['electric'],
+  // 'Shoes':     ['shoes'],
+  'Living':    ['living'],
+  'Jewelry':   ['jewelry'],
+  'Kids':      ['kids'],
+  'Other':     ['other'],
 };
 
 const categoryColors: Record<string, string> = {
-  'Fashion & Apparel': 'bg-indigo-50',
-  'Sports & Outdoor': 'bg-orange-50',
-  'Electronics': 'bg-blue-50',
-  'Fitness': 'bg-green-50',
-  'Dining': 'bg-amber-50',
+  'fashion':   'bg-purple-50',
+  'beverage':  'bg-amber-50',
+  'cosmetics': 'bg-pink-50',
+  'electric':  'bg-blue-50',
+  'shoes':     'bg-orange-50',
+  'outdoor':   'bg-green-50',
+  'living':    'bg-cyan-50',
+  'jewelry':   'bg-yellow-50',
+  'kids':      'bg-rose-50',
+  'other':     'bg-gray-50',
 };
 
 const categoryDecorations: Record<string, string> = {
-  'Fashion & Apparel': 'bg-purple-500/5',
-  'Sports & Outdoor': 'bg-orange-500/5',
-  'Electronics': 'bg-blue-500/5',
-  'Fitness': 'bg-green-500/5',
-  'Dining': 'bg-amber-500/5',
+  'fashion':   'bg-purple-500/5',
+  'beverage':  'bg-amber-500/5',
+  'cosmetics': 'bg-pink-500/5',
+  'electric':  'bg-blue-500/5',
+  'shoes':     'bg-orange-500/5',
+  'outdoor':   'bg-green-500/5',
+  'living':    'bg-cyan-500/5',
+  'jewelry':   'bg-yellow-500/5',
+  'kids':      'bg-rose-500/5',
+  'other':     'bg-gray-500/5',
 };
 
 export function SearchOverlay({ isOpen, onClose }: SearchOverlayProps) {

@@ -26,10 +26,13 @@ from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String, Float32
 
 from malle_controller.msg import TaskCommand, RobotMessage
+from malle_controller.nav_core import NavCore
+from malle_controller.api_client import ApiClient
+from malle_controller.poi_manager import PoiManager
+from malle_controller.mission_guide import GuideExecutor
 
 try:
     import cv2
-    import threading
     import time
     from pinkylib import Camera
     from malle_controller.mission_follow import MissionFollowNode
@@ -52,16 +55,34 @@ class RobotState(Enum):
     EXCEPTION = auto()
 
 
-class MissionExecutor(Node):
+class MissionExecutor(Node, NavCore):
 
+    # 1. 인자(api_base_url) 제거
     def __init__(self):
-        super().__init__('mission_executor')
+        Node.__init__(self, 'mission_executor')
+        self.nav_core_init(self)
+
+        # 2. ROS 2 파라미터 선언 및 읽어오기 추가
+        self.declare_parameter('api_base_url', 'http://localhost:8000/api/v1')
+        api_base_url = self.get_parameter('api_base_url').value
 
         self.state           = RobotState.IDLE
         self.robot_id        = 'malle_01'
         self.battery         = 0.0
         self.current_task_id = ''
         self._poi_ids        = ''
+
+        # 3. 읽어온 api_base_url 적용
+        self._api     = ApiClient(base_url=api_base_url, logger=self.get_logger())
+        self._poi_mgr = PoiManager(self._api, logger=self.get_logger())
+        self._poi_mgr.load()
+        
+
+        self._guide = GuideExecutor(self, self._api, self._poi_mgr)
+        # TODO: self._follow = FollowExecutor(...)
+        # TODO: self._pickup = PickupExecutor(...)
+
+        self._lock = threading.Lock()
 
         self.cmd_sub = self.create_subscription(
             TaskCommand, '/malle/command', self._on_command, 10)
@@ -71,12 +92,62 @@ class MissionExecutor(Node):
             String, '/malle/battery_status', self._on_battery, 10)
         self.battery_pct_sub = self.create_subscription(
             Float32, '/battery/present', self._on_battery_pct, 10)
+        self.guide_advance_sub = self.create_subscription(
+            String, '/malle/guide_advance', self._on_guide_advance, 10)
 
         self.state_pub   = self.create_publisher(RobotMessage, '/malle/robot_state', 10)
         self.trigger_pub = self.create_publisher(String, '/malle/mission_trigger', 10)
 
         self.create_timer(1.0, self._publish_state)
-        self.get_logger().info(f"[MissionExecutor] 초기 상태: {self.state.name}")
+        self.get_logger().info(f'[MissionExecutor] 준비 완료 (상태: {self.state.name})')
+
+    # ── 외부 인터페이스 (bridge_node에서 직접 호출) ──────────────────────────
+
+    def dispatch_guide(self, session_id: int,
+                       queue_items: list[dict] | None = None):
+        """
+        가이드 미션 시작 (HTTP 경로).
+        _transition() 을 거치지 않아 ROS2 트리거를 발행하지 않음.
+
+        Parameters
+        ----------
+        session_id  : 세션 ID
+        queue_items : 이미 조회된 queue item 목록 (없으면 서버에서 재조회)
+        """
+        with self._lock:
+            if self._guide.is_active:
+                self._guide.stop()
+
+        if queue_items is None:
+            try:
+                items = self._api.get_guide_queue(session_id)
+                queue_items = [
+                    i for i in items
+                    if i.get('status') == 'PENDING' and i.get('is_active')
+                ]
+            except Exception as e:
+                self.get_logger().error(
+                    f'[MissionExecutor] guide_queue 조회 실패: {e}'
+                )
+                return
+
+        if not queue_items:
+            self.get_logger().warn(
+                f'[MissionExecutor] session={session_id} 실행할 항목 없음'
+            )
+            return
+
+        self.get_logger().info(f'[MissionExecutor] {self.state.name} → GUIDE')
+        self.state = RobotState.GUIDE
+        self._guide.start(session_id, queue_items)
+
+    def stop_all(self):
+        """모든 실행 중인 미션 중지 (E-Stop / 세션 종료 시)."""
+        self._guide.stop()
+        self._transition(RobotState.IDLE)
+        self.get_logger().info('[MissionExecutor] 전체 미션 중지')
+
+    # ── ROS2 토픽 인터페이스 ─────────────────────────────────────────────────
 
     def _on_command(self, msg: TaskCommand):
         task_type = msg.task_type.strip().upper()
@@ -103,7 +174,16 @@ class MissionExecutor(Node):
 
     def _cmd_guide(self):
         if self.state in (RobotState.IDLE, RobotState.GUIDE, RobotState.FOLLOW):
-            self._transition(RobotState.GUIDE)
+            session_id_str = self.current_task_id
+            if not session_id_str.isdigit():
+                self.get_logger().warn(f"GUIDE 명령: 유효하지 않은 session_id '{session_id_str}'")
+                return
+            self.state = RobotState.GUIDE
+            session_id = int(session_id_str)
+            threading.Thread(
+                target=lambda: self.dispatch_guide(session_id),
+                daemon=True,
+            ).start()
         else:
             self.get_logger().warn(f"GUIDE 명령 무시 (현재: {self.state.name})")
 
@@ -148,6 +228,13 @@ class MissionExecutor(Node):
         else:
             self.get_logger().warn(f"처리되지 않은 result: '{result}' (state: {self.state.name})")
 
+    def _on_guide_advance(self, msg: String):
+        """bridge_node /bridge/guide/advance → 다음 POI로 이동."""
+        if self._guide.is_waiting:
+            threading.Thread(target=self._guide.advance, daemon=True).start()
+        else:
+            self.get_logger().warn('[MissionExecutor] guide_advance 수신 — 대기 중 아님, 무시')
+
     def _on_battery(self, msg: String):
         try:
             self.battery = float(msg.data)
@@ -156,11 +243,6 @@ class MissionExecutor(Node):
 
     def _on_battery_pct(self, msg: Float32):
         self.battery = float(msg.data)
-
-    def stop_all(self):
-        """모든 실행 중인 미션 중지 (E-Stop / 세션 종료 시)."""
-        self._transition(RobotState.IDLE)
-        self.get_logger().info('[MissionExecutor] 전체 미션 중지')
 
     # ── 상태 관리 ────────────────────────────────────────────────────────────
 
@@ -198,65 +280,27 @@ class MissionExecutor(Node):
         msg.error_message         = ''
         self.state_pub.publish(msg)
 
+    # ── 프로퍼티 ─────────────────────────────────────────────────────────────
+
+    @property
+    def guide_active(self) -> bool:
+        return self._guide.is_active
+
 
 def main():
+    import os
     rclpy.init()
     executor = MultiThreadedExecutor()
-    nodes = [MissionExecutor()]
-
-    camera = None
-
-    if _CAMERA_AVAILABLE:
-        # == 카메라 초기화 (단일 소유) ====================
-        try:
-            cam = Camera()
-            cam.start(width=640, height=480)
-            camera = cam
-
-            _latest_gray = None
-            _frame_lock = threading.Lock()
-
-            def _capture():
-                nonlocal _latest_gray
-                while True:
-                    frame = cam.get_frame()
-                    if frame is not None:
-                        with _frame_lock:
-                            _latest_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-                    time.sleep(0.01)
-
-            def get_gray_frame():
-                with _frame_lock:
-                    return _latest_gray
-
-            threading.Thread(target=_capture, daemon=True).start()
-
-            nodes += [
-                MissionFollowNode(get_gray_frame),
-                TagTrackerNode(get_gray_frame),
-                PinkyParkingNode(get_gray_frame),
-            ]
-        except Exception as e:
-            rclpy.logging.get_logger('mission_executor').warn(
-                f'카메라 초기화 실패 - 카메라 노드 비활성화: {e}')
-            camera = None
-    else:
-        rclpy.logging.get_logger('mission_executor').warn(
-            'pinkylib 없음 - 카메라 노드 비활성화')
-
-    for node in nodes:
-        executor.add_node(node)
+    api_url = os.getenv('MALLE_SERVICE_URL', 'http://localhost:8000/api/v1')
+    executor.add_node(MissionExecutor(api_base_url=api_url))
 
     try:
         executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        for node in nodes:
-            node.destroy_node()
+        executor.shutdown()
         rclpy.shutdown()
-        if camera is not None:
-            camera.close()
 
 
 if __name__ == '__main__':
