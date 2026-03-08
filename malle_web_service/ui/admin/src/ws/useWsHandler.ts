@@ -23,6 +23,7 @@ interface DashboardWsCallbacks {
   onFollowStarted: (data: Record<string, unknown>) => void;
   onFollowStopped: (data: Record<string, unknown>) => void;
   onZoneUpdated?: (action: 'created' | 'updated' | 'deleted', zone: Record<string, any>) => void;
+  onRouteUpdated?: (robotId: number, route: Array<{ wp_id: string; x: number; y: number }>) => void;
 }
 
 export function useWsHandler(callbacks: DashboardWsCallbacks) {
