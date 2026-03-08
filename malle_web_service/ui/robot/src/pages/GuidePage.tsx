@@ -1,11 +1,14 @@
 import { useRobotStore } from '@/stores/robotStore';
 import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { stores } from '@/data/stores';
+import { guideApi } from '@/api/guide';
+import type { StoreRes } from '@/api/services';
 
 export function GuidePage() {
   const {
     guide,
+    currentSessionId,
+    storeList,
     addToGuideQueue,
     removeFromGuideQueue,
     clearGuideQueue,
@@ -14,7 +17,6 @@ export function GuidePage() {
     startGuide,
     stopGuide,
     advanceGuide,
-    setGuideItemStatus,
     setRobotStatus,
   } = useRobotStore();
 
@@ -32,11 +34,11 @@ export function GuidePage() {
     : null;
   const isLastStop = guide.isExecuting && guide.currentDestinationIndex >= selectedItems.length - 1;
 
-  const handleAddDestination = (store: typeof stores[0]) => {
+  const handleAddDestination = (store: StoreRes) => {
     addToGuideQueue({
-      poiId: store.id,
-      poiName: store.name,
-      floor: store.location,
+      poiId: String(store.poi_id),
+      poiName: store.name || `Store #${store.id}`,
+      floor: store.category || 'Level 1',
       estimatedTime: Math.floor(Math.random() * 5) + 2,
     });
     setShowAddDialog(false);
@@ -49,10 +51,10 @@ export function GuidePage() {
       
       setTimeout(() => {
         setRobotStatus('WAITING');
-        const { guide: latestGuide } = useRobotStore.getState();
+        const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
         const items = latestGuide.queue.filter(item => item.selected);
-        if (items[0]) {
-          setGuideItemStatus(items[0].id, 'ARRIVED');
+        if (items[0]?.serverItemId && sid) {
+          guideApi.updateItemStatus(sid, items[0].serverItemId, 'ARRIVED').catch(() => {});
         }
         setShowArrivalDialog(true);
       }, 3000);
@@ -63,8 +65,8 @@ export function GuidePage() {
     setShowArrivalDialog(false);
     
     if (action === 'cancel' || action === 'end') {
-      if (currentDestination) {
-        setGuideItemStatus(currentDestination.id, 'DONE');
+      if (currentDestination?.serverItemId && currentSessionId) {
+        guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
       }
       stopGuide();
       setRobotStatus('IDLE');
@@ -86,32 +88,40 @@ export function GuidePage() {
     }
 
     if (action === 'next') {
-      if (currentDestination) {
-        setGuideItemStatus(currentDestination.id, 'DONE');
-      }
+      setShowArrivalDialog(false);
       advanceGuide();
       setRobotStatus('MOVING');
-
-      const remaining = selectedItems.filter(item => item.status !== 'DONE');
-      if (remaining.length > 1) {
-        setTimeout(() => {
-          setRobotStatus('WAITING');
-          // 클로저 대신 최신 store 상태 직접 참조
-          const { guide: latestGuide } = useRobotStore.getState();
-          const nextItems = latestGuide.queue.filter(item => item.selected);
-          const nextItem = nextItems[latestGuide.currentDestinationIndex];
-          if (nextItem) {
-            setGuideItemStatus(nextItem.id, 'ARRIVED');
-          }
-          setShowArrivalDialog(true);
-        }, 3000);
-      } else {
-        setTimeout(() => {
-          stopGuide();
-          setRobotStatus('IDLE');
-        }, 1000);
+      if (currentSessionId) {
+        guideApi.advance(currentSessionId).catch(() => {});
       }
     }
+    // if (action === 'next') {
+    //   if (currentDestination?.serverItemId && currentSessionId) {
+    //     guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
+    //   }
+    //   advanceGuide();
+    //   setRobotStatus('MOVING');
+
+    //   const remaining = selectedItems.filter(item => item.status !== 'DONE');
+    //   if (remaining.length > 1) {
+    //     setTimeout(() => {
+    //       setRobotStatus('WAITING');
+    //       // 클로저 대신 최신 store 상태 직접 참조
+    //       const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
+    //       const nextItems = latestGuide.queue.filter(item => item.selected);
+    //       const nextItem = nextItems[latestGuide.currentDestinationIndex];
+    //       if (nextItem?.serverItemId && sid) {
+    //         guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
+    //       }
+    //       setShowArrivalDialog(true);
+    //     }, 3000);
+    //   } else {
+    //     setTimeout(() => {
+    //       stopGuide();
+    //       setRobotStatus('IDLE');
+    //     }, 1000);
+    //   }
+    // }
   };
 
   const handleWaitPinKey = useCallback((digit: string) => {
@@ -132,37 +142,46 @@ export function GuidePage() {
 
   const handleWaitNextStop = () => {
     setShowWaitingOverlay(false);
-    if (currentDestination) {
-      setGuideItemStatus(currentDestination.id, 'DONE');
-    }
     advanceGuide();
     setRobotStatus('MOVING');
-
-    const remaining = selectedItems.filter(item => item.status !== 'DONE');
-    if (remaining.length > 1) {
-      setTimeout(() => {
-        setRobotStatus('WAITING');
-        // 클로저 대신 최신 store 상태 직접 참조
-        const { guide: latestGuide } = useRobotStore.getState();
-        const nextItems = latestGuide.queue.filter(item => item.selected);
-        const nextItem = nextItems[latestGuide.currentDestinationIndex];
-        if (nextItem) {
-          setGuideItemStatus(nextItem.id, 'ARRIVED');
-        }
-        setShowArrivalDialog(true);
-      }, 3000);
-    } else {
-      setTimeout(() => {
-        stopGuide();
-        setRobotStatus('IDLE');
-      }, 1000);
+    if (currentSessionId) {
+      guideApi.advance(currentSessionId).catch(() => {});
     }
   };
 
+  // const handleWaitNextStop = () => {
+  //   setShowWaitingOverlay(false);
+  //   if (currentDestination?.serverItemId && currentSessionId) {
+  //     guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
+  //   }
+  //   advanceGuide();
+  //   setRobotStatus('MOVING');
+
+  //   const remaining = selectedItems.filter(item => item.status !== 'DONE');
+  //   if (remaining.length > 1) {
+  //     setTimeout(() => {
+  //       setRobotStatus('WAITING');
+  //       // 클로저 대신 최신 store 상태 직접 참조
+  //       const { guide: latestGuide, currentSessionId: sid } = useRobotStore.getState();
+  //       const nextItems = latestGuide.queue.filter(item => item.selected);
+  //       const nextItem = nextItems[latestGuide.currentDestinationIndex];
+  //       if (nextItem?.serverItemId && sid) {
+  //         guideApi.updateItemStatus(sid, nextItem.serverItemId, 'ARRIVED').catch(() => {});
+  //       }
+  //       setShowArrivalDialog(true);
+  //     }, 3000);
+  //   } else {
+  //     setTimeout(() => {
+  //       stopGuide();
+  //       setRobotStatus('IDLE');
+  //     }, 1000);
+  //   }
+  // };
+
   const handleWaitEndGuide = () => {
     setShowWaitingOverlay(false);
-    if (currentDestination) {
-      setGuideItemStatus(currentDestination.id, 'DONE');
+    if (currentDestination?.serverItemId && currentSessionId) {
+      guideApi.updateItemStatus(currentSessionId, currentDestination.serverItemId, 'DONE').catch(() => {});
     }
     stopGuide();
     setRobotStatus('IDLE');
@@ -395,18 +414,18 @@ export function GuidePage() {
                 </button>
               </div>
               <div className="space-y-2 max-h-[400px] overflow-y-auto hide-scrollbar">
-                {stores.filter(s => s.open).map((store) => (
+                {storeList.map((store) => (
                   <button
                     key={store.id}
                     onClick={() => handleAddDestination(store)}
                     className="w-full flex items-center space-x-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left"
                   >
                     <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                      <span className="material-icons-round text-primary">{store.icon}</span>
+                      <span className="material-icons-round text-primary">store</span>
                     </div>
                     <div>
                       <p className="font-semibold text-foreground">{store.name}</p>
-                      <p className="text-sm text-muted-foreground">{store.location}</p>
+                      <p className="text-sm text-muted-foreground">{store.category || 'Level 1'}</p>
                     </div>
                   </button>
                 ))}
@@ -594,18 +613,18 @@ export function GuidePage() {
               </button>
             </div>
             <div className="space-y-2 max-h-[400px] overflow-y-auto hide-scrollbar">
-              {stores.filter(s => s.open).map((store) => (
+              {storeList.map((store) => (
                 <button
                   key={store.id}
                   onClick={() => handleAddDestination(store)}
                   className="w-full flex items-center space-x-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left"
                 >
                   <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                    <span className="material-icons-round text-primary">{store.icon}</span>
+                    <span className="material-icons-round text-primary">store</span>
                   </div>
                   <div>
                     <p className="font-semibold text-foreground">{store.name}</p>
-                    <p className="text-sm text-muted-foreground">{store.location}</p>
+                    <p className="text-sm text-muted-foreground">{store.category || 'Level 1'}</p>
                   </div>
                 </button>
               ))}

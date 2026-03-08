@@ -33,7 +33,7 @@ export interface TaskMission {
   destinationPoi?: POI;
   storeId?: string;
   storeName?: string;
-  items?: { name: string; quantity: number; price: number }[];
+  items?: { name: string; quantity: number; price: number; productId?: number }[];
 }
 
 export interface GuideDestination {
@@ -54,7 +54,8 @@ export interface FollowMeState {
 }
 
 export interface PickupOrder {
-  orderId: string;
+  orderId: string;       // 표시용: "#1234"
+  serverOrderId: number | null;  // 서버 DB id (meetup API 호출용)
   storeId: string;
   storeName: string;
   items: { name: string; quantity: number; price: number }[];
@@ -117,6 +118,8 @@ export interface POI {
   name: string;
   x: number;
   y: number;
+  map_x?: number | null;
+  map_y?: number | null;
   waitPoint: { x: number; y: number };
   category: string;
 }
@@ -145,7 +148,7 @@ interface AppState {
   searchState: SearchState;
   stores: Store[];
   pois: POI[];
-  storeProducts: Record<string, { name: string; option: string; price: number }[]>;
+  storeProducts: Record<string, { name: string; option: string; price: number; productId: number }[]>;
 
   initFromServer: () => Promise<void>;
 
@@ -155,6 +158,7 @@ interface AppState {
   startPinMatching: () => void;
   activateSession: () => void;
   endSession: () => void;
+  _resetOnSessionEnded: () => void;
   setRobotMode: (mode: RobotMode) => void;
   updateRemainingTime: (seconds: number) => void;
   setTaskMission: (mission: TaskMission) => void;
@@ -171,7 +175,7 @@ interface AppState {
   stopFollowMe: () => void;
   setFollowStatus: (status: FollowStatus) => void;
 
-  createPickupOrder: (storeId: string, items: { name: string; quantity: number; price: number }[]) => void;
+  createPickupOrder: (storeId: string, items: { name: string; quantity: number; price: number; productId?: number }[]) => void;
   setPickupStatus: (status: PickupStatus) => void;
   setMeetupLocation: (location: string) => void;
 
@@ -247,9 +251,14 @@ function mapStore(s: StoreRes): Store {
     icon: catIcon[c] || 'store', open: true, closeTime: '9:00 PM' };
 }
 function mapPoi(p: PoiRes): POI {
-  return { id: p.id, name: p.name, x: p.x_m, y: p.y_m,
+  return { 
+    id: p.id, name: p.name, 
+    x: p.x_m, y: p.y_m,
+    map_x: p.map_x_m,
+    map_y: p.map_y_m,
     waitPoint: { x: p.wait_x_m ?? p.x_m - 2, y: p.wait_y_m ?? p.y_m - 2 },
-    category: p.type || 'OTHER' };
+    category: p.type || 'OTHER'
+  };
 }
 
 /* 빈 슬롯 5개 — UI 기본 골격 (서버 데이터 로드 전 표시용, 세션 종료 시 복원) */
@@ -301,7 +310,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (pr?.length) u.pois = pr.map(mapPoi);
 
       if (sr?.length) {
-        const productsMap: Record<string, { name: string; option: string; price: number }[]> = {};
+        const productsMap: Record<string, { name: string; option: string; price: number; productId: number }[]> = {};
         const results = await Promise.all(
           sr.map(s => storeApi.getProducts(s.id).catch(() => null))
         );
@@ -312,6 +321,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               name: p.name,
               option: p.sku || '',
               price: p.price,
+              productId: p.id,
             }));
           }
         });
@@ -338,7 +348,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             robot: {
               id: String(res.assigned_robot_id),
               name: `Mall·E-${res.assigned_robot_id}`,
-              battery: 80,
+              battery: 100,
               mode: null,
               location: { x: 0, y: 0 },
             },
@@ -353,7 +363,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   assignRobot: (robot) => set({ sessionState: 'APPROACHING', robot: { ...robot, name: robot.name.replace('PinkyPro', 'Mall·E') } }),
   startPinMatching: () => set({ sessionState: 'PIN_MATCHING', approachingEta: 0 }),
 
-  activateSession: () => set((state) => {
+  activateSession: async () => {
+    const state = get();
     const updates: Partial<AppState> = { sessionState: 'ACTIVE', session: { ...state.session, startedAt: new Date() } };
     if (state.session.type === 'TASK' && state.taskMission) {
       if (state.taskMission.type === 'GUIDE' && state.taskMission.destinationPoi) {
@@ -369,22 +380,31 @@ export const useAppStore = create<AppState>((set, get) => ({
           selected: true,
         }];
         updates.robot = state.robot ? { ...state.robot, mode: 'GUIDE' } : null;
-        if (state.currentSessionId) guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
+        set(updates);
+        if (state.currentSessionId) {
+          await guideApi.addToQueue(state.currentSessionId, Number(poi.id)).catch(() => {});
+          await guideApi.execute(state.currentSessionId).catch(() => {});
+        }
+        return;
       } else if (state.taskMission.type === 'PICKUP' && state.taskMission.storeId && state.taskMission.items) {
         const store = state.stores.find(s => s.id === state.taskMission!.storeId);
-        const emptySlot = state.lockboxSlots.find(s => s.status === 'EMPTY');
         const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
-        updates.pickupOrder = { orderId, storeId: state.taskMission.storeId, storeName: store?.name || state.taskMission.storeName || 'Unknown Store', items: state.taskMission.items, status: 'MOVING', meetupLocation: null, slotId: emptySlot?.number || null };
-        if (emptySlot) updates.lockboxSlots = state.lockboxSlots.map(slot => slot.number === emptySlot.number ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot);
+        // 로컬 pickupOrder 상태만 설정 — lockbox RESERVED는 서버 API → WS LOCKBOX_UPDATED로 동기화
+        updates.pickupOrder = { orderId, serverOrderId: null, storeId: state.taskMission.storeId, storeName: store?.name || state.taskMission.storeName || 'Unknown Store', items: state.taskMission.items, status: 'MOVING', meetupLocation: null, slotId: null };
         updates.robot = state.robot ? { ...state.robot, mode: 'PICKUP' } : null;
       }
     }
-    return updates;
-  }),
+    set(updates);
+  },
 
   endSession: () => {
     const { currentSessionId } = get();
     if (currentSessionId) sessionApi.end(currentSessionId).catch(() => {});
+    set({ sessionState: 'NO_SESSION', robot: null, session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null }, taskMission: null, guideQueue: [], followMe: { active: false, tagNumber: 11, status: 'STOPPED' }, pickupOrder: null, currentSessionId: null, currentRobotId: null, matchPin: null, lockboxSlots: initialLockboxSlots, lockboxLogs: [] });
+  },
+
+  // WS SESSION_ENDED 수신 시 사용 — API 재호출 없이 상태만 초기화
+  _resetOnSessionEnded: () => {
     set({ sessionState: 'NO_SESSION', robot: null, session: { type: 'TIME', duration: 120, remainingTime: 7200, startedAt: null }, taskMission: null, guideQueue: [], followMe: { active: false, tagNumber: 11, status: 'STOPPED' }, pickupOrder: null, currentSessionId: null, currentRobotId: null, matchPin: null, lockboxSlots: initialLockboxSlots, lockboxLogs: [] });
   },
 
@@ -446,17 +466,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   startGuide: () => {
-    set((s) => {
-      const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
-      if (!f) return s;
-      return {
-        guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i),
-        robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null,
-      };
-    });
-    const { currentSessionId } = get();
-    if (currentSessionId) guideApi.execute(currentSessionId).catch(() => {});
-  },
+      set((s) => {
+        const f = s.guideQueue.find((i) => i.selected && i.status === 'PENDING');
+        if (!f) return s;
+        return {
+          guideQueue: s.guideQueue.map((i) => i.id === f.id ? { ...i, status: 'IN_PROGRESS' as GuideStatus } : i),
+          robot: s.robot ? { ...s.robot, mode: 'GUIDE' } : null,
+        };
+      });
+      const { currentSessionId } = get();
+      if (currentSessionId) {
+        guideApi.execute(currentSessionId)
+          .then((res) => console.log('[Guide] execute OK:', res))  // ← 추가
+          .catch((e) => console.error('[Guide] execute FAIL:', e)); // ← 추가
+      }
+    },
 
   completeCurrentGuide: () => set((s) => {
     const cur = s.guideQueue.find((i) => i.status === 'IN_PROGRESS');
@@ -504,20 +528,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!emptySlot) return;
     const orderId = `#${Math.floor(1000 + Math.random() * 9000)}`;
     set({
-      pickupOrder: { orderId, storeId, storeName: store?.name || 'Unknown Store', items, status: 'IDLE', meetupLocation: null, slotId: emptySlot.number },
-      lockboxSlots: state.lockboxSlots.map(slot => slot.number === emptySlot.number ? { ...slot, status: 'RESERVED' as LockboxStatus, orderInfo: { orderId, storeName: store?.name || 'Unknown Store', customerName: state.userName } } : slot),
+      pickupOrder: { orderId, serverOrderId: null, storeId, storeName: store?.name || 'Unknown Store', items, status: 'IDLE', meetupLocation: null, slotId: 0 },
     });
-    if (state.currentSessionId) pickupApi.create(state.currentSessionId, { pickup_poi_id: Number(storeId), created_channel: 'APP', items: items.map((it, i) => ({ product_id: i + 1, qty: it.quantity, unit_price: it.price })) }).catch(() => {});
+    if (state.currentSessionId) {
+      pickupApi.create(state.currentSessionId, {
+        pickup_poi_id: store?.poi_id ?? Number(storeId),
+        created_channel: 'APP',
+        items: items.map((it) => ({
+            product_id: it.productId ?? 0,  // ← i + 1 대신
+            qty: it.quantity,
+            unit_price: it.price,
+        })),
+      }).then((res) => {
+        // 서버 ID 저장 (meetup API 호출용)
+        useAppStore.setState((s) => ({
+          pickupOrder: s.pickupOrder ? { ...s.pickupOrder, serverOrderId: res.id } : null,
+        }));
+      }).catch(() => {});
+    }
   },
-  setPickupStatus: (status) => set((s) => {
-    const u: Partial<AppState> = {
-      pickupOrder: s.pickupOrder ? { ...s.pickupOrder, status } : null,
-      robot: s.robot ? { ...s.robot, mode: status === 'DONE' ? null : status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
-    };
-    if (status === 'RETURNING' && s.pickupOrder?.slotId)
-      u.lockboxSlots = s.lockboxSlots.map(slot => slot.number === s.pickupOrder!.slotId ? { ...slot, status: 'PICKEDUP' as LockboxStatus, occupiedSince: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) } : slot);
-    return u;
-  }),
+  setPickupStatus: (status) => set((s) => ({
+    pickupOrder: s.pickupOrder ? { ...s.pickupOrder, status } : null,
+    robot: s.robot ? { ...s.robot, mode: status === 'DONE' ? null : status !== 'IDLE' ? 'PICKUP' : s.robot.mode } : null,
+  })),
   setMeetupLocation: (location) => set((s) => ({ pickupOrder: s.pickupOrder ? { ...s.pickupOrder, meetupLocation: location } : null })),
 
   /* ───── Lockbox ───── */
@@ -551,11 +584,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   _setLockboxSlotsFromServer: (serverSlots) => set((s) => ({
     lockboxSlots: serverSlots.map((sl) => {
       const existing = s.lockboxSlots.find((e) => e.number === sl.slot_no);
+      let newOrderInfo = existing?.orderInfo;
+      if (sl.order_id != null) {
+        newOrderInfo = {
+          orderId: `#${sl.order_id}`,
+          storeName: sl.store_name ?? existing?.orderInfo?.storeName ?? `Order #${sl.order_id}`,
+          customerName: existing?.orderInfo?.customerName ?? s.userName,
+        };
+      }
       return {
         number: sl.slot_no,
         status: sl.status as LockboxStatus,
         occupiedSince: existing?.occupiedSince,
-        orderInfo: existing?.orderInfo,
+        orderInfo: newOrderInfo,
       };
     }),
   })),

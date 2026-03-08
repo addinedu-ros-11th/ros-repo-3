@@ -87,7 +87,8 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
     }
 
     case "SESSION_ENDED":
-      store.endSession();
+      // API 재호출 방지 — 상태만 초기화
+      store._resetOnSessionEnded();
       store.addNotification({
         category: "SYSTEM",
         title: "Session Ended",
@@ -168,8 +169,9 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
     /* ───── Pickup events ───── */
 
     case "PICKUP_STATUS_CHANGED": {
-      // payload: { status, order_id, ... }
-      const status = p.status as PickupStatus;
+      // payload: { status, order_id, ... } — 서버 enum → 프론트 PickupStatus 변환
+      const rawStatus = p.status as string;
+      const status = mapPickupStatus(rawStatus) as PickupStatus;
       if (status) {
         store.setPickupStatus(status);
         if (status === "LOADED") store.setShowLoadingOverlay(true);
@@ -183,16 +185,33 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
       break;
     }
 
-    case "PICKUP_MEET_SET":
-      // payload: { meet_poi_name, meet_type }
-      if (p.meet_poi_name && useRobotStore.getState().pickup.currentOrder) {
+    case "PICKUP_MEET_SET": {
+      // payload: PickupOrderResponse + meet_poi_name (백엔드에서 추가)
+      const meetLocation: string =
+        (p.meet_poi_name as string | null) ||
+        (p.meet_poi_id ? `POI #${p.meet_poi_id}` : 'Meet-up Point');
+
+      if (useRobotStore.getState().pickup.currentOrder) {
         useRobotStore.setState((s) => ({
           pickup: s.pickup.currentOrder
-            ? { ...s.pickup, currentOrder: { ...s.pickup.currentOrder, meetupLocation: p.meet_poi_name } }
+            ? {
+                ...s.pickup,
+                currentOrder: {
+                  ...s.pickup.currentOrder,
+                  meetupLocation: meetLocation,
+                  status: 'MEETUP_SET',
+                },
+              }
             : s.pickup,
         }));
+        store.addNotification({
+          category: 'PICKUP',
+          title: 'Meet-up Location Set',
+          description: `Customer selected: ${meetLocation}`,
+        });
       }
       break;
+    }
 
     /* ───── Lockbox events ───── */
 
@@ -268,6 +287,17 @@ function handleWsMessage(msg: WsMessage, store: ReturnType<typeof useRobotStore.
 
     default:
       console.log("[WS] Unhandled event:", type, payload);
+  }
+}
+
+/* 서버 PickupStatus → 프론트 PickupStatus 변환 */
+function mapPickupStatus(serverStatus: string): string {
+  switch (serverStatus) {
+    case "CREATED":   return "MOVING";
+    case "LOADED":    return "LOADED";
+    case "MEET_SET":  return "MEETUP_SET";
+    case "COMPLETED": return "DONE";
+    default:          return serverStatus;
   }
 }
 
