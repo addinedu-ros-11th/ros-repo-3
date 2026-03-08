@@ -250,6 +250,11 @@ class NavCore:
         if self._current_goal_handle is not None:
             self._current_goal_handle.cancel_goal_async()
             self._current_goal_handle = None
+        if self._nav_api and self._nav_robot_id:
+            try:
+                self._nav_api.clear_route(self._nav_robot_id)
+            except Exception:
+                pass            
 
     # ── Zone 체크 (Nav2 → PID 전환) ──────────────────────────
 
@@ -413,6 +418,13 @@ class NavCore:
             )
         else:
             success = self._blocking_navigate(target_x, target_y, target_yaw)
+
+        # ★ NEW — 경로 완료 시 클리어
+        if self._nav_api and self._nav_robot_id:
+            try:
+                self._nav_api.clear_route(self._nav_robot_id)
+            except Exception:
+                pass
 
         if done_callback:
             done_callback(success)
