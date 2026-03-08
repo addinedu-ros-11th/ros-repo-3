@@ -14,27 +14,27 @@ const timeOptions = [
   { label: '2 hours', value: 120 },
 ];
 
-const storeProducts: Record<string, { name: string; price: number }[]> = {
-  zara: [
-    { name: 'Linen Blend Shirt', price: 45.90 },
-    { name: 'Pleated Trousers', price: 59.90 },
-    { name: 'Cotton T-Shirt', price: 19.90 },
-  ],
-  nike: [
-    { name: 'Air Zoom Pegasus', price: 120.00 },
-    { name: 'Running Socks (3pk)', price: 18.00 },
-    { name: 'Dri-FIT Headband', price: 12.00 },
-  ],
-  apple: [
-    { name: 'USB-C Charge Cable', price: 19.00 },
-    { name: 'AirPods Case', price: 29.00 },
-  ],
-};
+// const storeProducts: Record<string, { name: string; price: number }[]> = {
+//   zara: [
+//     { name: 'Linen Blend Shirt', price: 45.90 },
+//     { name: 'Pleated Trousers', price: 59.90 },
+//     { name: 'Cotton T-Shirt', price: 19.90 },
+//   ],
+//   nike: [
+//     { name: 'Air Zoom Pegasus', price: 120.00 },
+//     { name: 'Running Socks (3pk)', price: 18.00 },
+//     { name: 'Dri-FIT Headband', price: 12.00 },
+//   ],
+//   apple: [
+//     { name: 'USB-C Charge Cable', price: 19.00 },
+//     { name: 'AirPods Case', price: 29.00 },
+//   ],
+// };
 
 type WizardStep = 'type' | 'mission-type' | 'mission-detail' | 'mission-summary';
 
 export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
-  const { startFindingRobot, setTaskMission, stores, pois } = useAppStore();
+  const { startFindingRobot, setTaskMission, stores, pois, storeProducts } = useAppStore();
   const [sessionType, setSessionType] = useState<SessionType>('TIME');
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [isLoading, setIsLoading] = useState(false);
