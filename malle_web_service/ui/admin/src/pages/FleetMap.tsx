@@ -361,7 +361,7 @@ export default function FleetMapPage() {
                   const fill = robot.status === 'E_STOP'       ? '#ef4444'
                     : robot.status === 'HEADING_MAINTENANCE' || robot.status === 'HEADING_STATION' ? '#f59e0b'
                     : robot.status === 'MOVING'   ? '#3b82f6'
-                    : robot.status === 'CHARGING' ? '#6366f1'
+                    : robot.status === 'CHARGING' ? '#64da66'
                     : '#94a3b8';
                   return (
                     <g
