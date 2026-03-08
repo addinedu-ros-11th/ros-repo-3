@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDashboard } from '@/context/DashboardContext';
 import { MI } from '@/components/MaterialIcon';
 import PageHeader from '@/components/PageHeader';
+import { WAYPOINTS } from '@/data/waypoints'; // ★ NEW
 
 // ── 좌표 변환: map_x_m/map_y_m (미터) → SVG 픽셀 (viewBox 0 0 450 380) ──────
 const SVG_W = 450;
@@ -80,8 +81,9 @@ function getConfirmMessage(action: PendingAction): string {
 export default function FleetMapPage() {
   const { robots, zones, pois, selectedRobotId, selectRobot, triggerEStop, releaseEStop, startTeleop, sendToMaintenance, returnToStation } = useDashboard();
   const navigate = useNavigate();
-  const [layers, setLayers] = useState({ robots: true, routes: true, zones: true, destinations: true });
+  const [layers, setLayers] = useState({ robots: true, routes: true, zones: true, destinations: true, waypoints: false }); // ★ CHANGED — waypoints 추가 (기본 off)
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [hoveredWaypoint, setHoveredWaypoint] = useState<string | null>(null); // ★ NEW
   const selectedRobot = robots.find(r => r.id === selectedRobotId);
 
   // Zoom & Pan state
@@ -257,6 +259,52 @@ export default function FleetMapPage() {
                   );
                 })}
 
+                {/* ★ NEW — Waypoints 레이어 */}
+                {layers.waypoints && WAYPOINTS.map(wp => {
+                  const { x, y } = toSvgCoord(wp.x, wp.y);
+                  const isHovered = hoveredWaypoint === wp.id;
+                  const isCharger = wp.id.startsWith('charger');
+                  return (
+                    <g
+                      key={`wp-${wp.id}`}
+                      onMouseEnter={() => setHoveredWaypoint(wp.id)}
+                      onMouseLeave={() => setHoveredWaypoint(null)}
+                      className="cursor-pointer"
+                    >
+                      {/* 빨간 점 (charger는 주황) */}
+                      <circle
+                        cx={x} cy={y}
+                        r={isHovered ? 5 : 3.5}
+                        fill={isCharger ? '#f59e0b' : '#ef4444'}
+                        stroke="white"
+                        strokeWidth="1"
+                        opacity={isHovered ? 1 : 0.8}
+                      />
+                      {/* Hover 툴팁 */}
+                      {isHovered && (
+                        <g>
+                          <rect
+                            x={x + 8} y={y - 20}
+                            width={Math.max(wp.id.length * 6.5 + 70, 95)}
+                            height="24"
+                            rx="4"
+                            fill="rgba(0,0,0,0.85)"
+                          />
+                          <text
+                            x={x + 13} y={y - 4}
+                            fontSize="9"
+                            fill="white"
+                            fontWeight="600"
+                            fontFamily="monospace"
+                          >
+                            {wp.id} ({wp.x.toFixed(3)}, {wp.y.toFixed(3)})
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  );
+                })}
+
                 {/* Routes: 운행 중인 로봇 → 목적지 POI 점선 */}
                 {layers.routes && robots.filter(r => r.currentTarget && r.status === 'MOVING').map(robot => {
                   const targetPoi = pois.find(p => p.name === robot.currentTarget);
@@ -298,7 +346,6 @@ export default function FleetMapPage() {
                         x={x + 7} y={y + 3}
                         fontSize="7"
                         fill="#808080"
-                        // className="fill-foreground"
                         style={{ fontWeight: 600 }}
                       >
                         {poi.name}
