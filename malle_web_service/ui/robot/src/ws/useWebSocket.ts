@@ -34,6 +34,7 @@ export function useWebSocket({
   onMessageRef.current = onMessage;
 
   const connect = useCallback(() => {
+    if (!path) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const ws = new WebSocket(`${WS_BASE}${path}`);
