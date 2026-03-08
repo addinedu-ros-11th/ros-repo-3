@@ -106,9 +106,11 @@ def _load_apriltag_config(yaml_path: str | None = None) -> tuple[dict, tuple, fl
 class NavCore:
     """Nav2 + PID + 웨이포인트 경로 계획 공용 엔진 (Node 믹스인용)."""
 
-    def nav_core_init(self, node: Node, waypoint_yaml: str | None = None):
+    def nav_core_init(self, node: Node, waypoint_yaml: str | None = None, robot_id: int | None = None, api=None):
         """미션 노드의 __init__에서 호출."""
         self._node = node
+        self._nav_robot_id = robot_id
+        self._nav_api = api 
 
         # cmd_vel 퍼블리셔 (relative topic — 노드 네임스페이스 자동 적용)
         self._cmd_pub = node.create_publisher(Twist, 'cmd_vel', 10)
