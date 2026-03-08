@@ -92,7 +92,7 @@ export function StartSessionModal({ isOpen, onClose }: StartSessionModalProps) {
     handleClose();
   };
 
-  const handleAddItem = (product: { name: string; price: number }) => {
+  const handleAddItem = (product: { name: string; price: number; productId?: number }) => {
     const existing = selectedItems.find(i => i.name === product.name);
     if (existing) {
       setSelectedItems(items =>
