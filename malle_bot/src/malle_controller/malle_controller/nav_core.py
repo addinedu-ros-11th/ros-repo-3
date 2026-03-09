@@ -17,8 +17,10 @@ import ament_index_python.packages as ament
 from malle_controller.pid_edges import get_pid_radius
 
 # 네비게이션 상수
-MAX_LINEAR_VEL      = 0.15          # PID 최대 선속도 (m/s)
-MAX_ANGULAR_VEL     = 1.0           # PID 최대 각속도 (rad/s)
+MAX_LINEAR_VEL      = 0.12          # PID 최대 선속도 (m/s)
+MAX_ANGULAR_VEL     = 0.8           # PID 최대 각속도 (rad/s)
+LINEAR_GAIN         = 0.25          # 선속도 비례 gain
+ANGULAR_GAIN        = 1.5           # 각속도 비례 gain
 ROTATE_FIRST_ANGLE  = math.radians(30)  # 이 각도 이상이면 제자리 회전 우선 (rad)
 ZONE_CHECK_PERIOD   = 0.1           # zone 체크 타이머 주기 (s)
 PID_PERIOD          = 0.02          # PID 루프 타이머 주기 (s)
@@ -350,9 +352,9 @@ class NavCore:
         if abs(yaw_err) > ROTATE_FIRST_ANGLE:
             linear_x = 0.0
         else:
-            linear_x = min(MAX_LINEAR_VEL, 0.5 * dist)
+            linear_x = min(MAX_LINEAR_VEL, LINEAR_GAIN * dist)
 
-        angular_z = max(-MAX_ANGULAR_VEL, min(MAX_ANGULAR_VEL, 2.0 * yaw_err))
+        angular_z = max(-MAX_ANGULAR_VEL, min(MAX_ANGULAR_VEL, ANGULAR_GAIN * yaw_err))
         self.cmd_vel(linear_x, angular_z)
 
     # ── 웨이포인트 주행 스레드 ────────────────────────────────
