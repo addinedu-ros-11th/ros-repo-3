@@ -17,10 +17,10 @@
       ros2 launch malle_controller bridge.launch.xml robot_namespace:=malle_15 robot_id:=1
   -->
 
-  <arg name="malle_service_url" default="http://localhost:8000"/>
-  <arg name="bridge_http_port"  default="9100"/>
-  <arg name="robot_namespace"   default="malle_15"/>
-  <arg name="robot_id"          default="1"/>
+  <arg name="malle_service_url" default="$(optenv MALLE_SERVICE_URL http://localhost:8000/api/v1)"/>
+  <arg name="bridge_http_port"  default="$(optenv BRIDGE_HTTP_PORT 9100)"/>
+  <arg name="robot_namespace"   default="$(optenv ROBOT_NAMESPACE malle_1)"/>
+  <arg name="robot_id"          default="$(optenv ROBOT_ID 1)"/>
 
   <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
         output="screen">

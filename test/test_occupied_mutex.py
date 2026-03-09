@@ -27,7 +27,15 @@ import argparse
 import sys
 import time
 import threading
+import os
+from pathlib import Path
 import requests
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
 
 # ── 전역 설정 ──────────────────────────────────────────────────────────────
 
@@ -272,22 +280,32 @@ def main():
   python3 test_occupied_mutex.py --url http://192.168.1.10:8000 --robot-a 1 --robot-b 2 --session-b 5 --poi 4
         """,
     )
-    parser.add_argument("--url",       default="http://localhost:8000",
-                        help="malle_service 기본 URL (기본값: http://localhost:8000)")
-    parser.add_argument("--robot-a",   type=int, required=True,
+    _svc_url = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
+    _svc_base = _svc_url.rsplit("/api/", 1)[0] if "/api/" in _svc_url else _svc_url
+    _env_int = lambda k: int(os.getenv(k)) if os.getenv(k) else None
+
+    parser.add_argument("--url",       default=_svc_base,
+                        help="malle_service 기본 URL (기본값: MALLE_SERVICE_URL 또는 http://localhost:8000)")
+    parser.add_argument("--robot-a",   type=int, default=_env_int("TEST_ROBOT_A"),
                         help="점유 로봇 ID — PID 구간 진입을 시뮬레이션")
-    parser.add_argument("--robot-b",   type=int, required=True,
+    parser.add_argument("--robot-b",   type=int, default=_env_int("TEST_ROBOT_B"),
                         help="대기 로봇 ID — execute 차단 후 자동 재실행 대상")
-    parser.add_argument("--session-b", type=int, required=True,
+    parser.add_argument("--session-b", type=int, default=_env_int("TEST_SESSION_B"),
                         help="로봇B에 배정된 세션 ID")
-    parser.add_argument("--poi",       type=int, required=True,
+    parser.add_argument("--poi",       type=int, default=_env_int("TEST_POI_ID"),
                         help="충돌 테스트용 목적지 POI ID")
-    parser.add_argument("--hold",      type=int, default=5,
+    parser.add_argument("--hold",      type=int, default=int(os.getenv("TEST_HOLD_SEC", "5")),
                         help="OCCUPIED 유지 시간(초) — 이후 자동 IDLE 해제 (기본값: 5)")
     parser.add_argument("--add-item",  action="store_true",
                         help="세션B 큐에 POI 항목이 없으면 자동 추가")
 
     args = parser.parse_args()
+
+    required = {"--robot-a": args.robot_a, "--robot-b": args.robot_b,
+                "--session-b": args.session_b, "--poi": args.poi}
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        parser.error(f"{', '.join(missing)} 값이 필요합니다 (인자로 전달하거나 .env에 TEST_ROBOT_A/B, TEST_SESSION_B, TEST_POI_ID 설정)")
 
     global BASE
     BASE = f"{args.url.rstrip('/')}/api/v1"

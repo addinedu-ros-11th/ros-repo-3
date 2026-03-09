@@ -18,10 +18,18 @@ verify_comms.py  –  malle_service ↔ bridge_node ↔ malle_bot 통신 확인
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 import httpx
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent.parent.parent.parent / ".env")
+except ImportError:
+    pass
 
 
 # ── 출력 헬퍼 ─────────────────────────────────────────────────────────────────
@@ -253,11 +261,14 @@ def check_ros2_to_bridge(robot_ns: str) -> bool:
 # ── 메인 ──────────────────────────────────────────────────────────────────────
 
 def main():
+    _svc_url = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
+    _svc_base = _svc_url.rsplit("/api/", 1)[0] if "/api/" in _svc_url else _svc_url
+
     parser = argparse.ArgumentParser(description='malle 통신 확인 스크립트')
-    parser.add_argument('--bridge-url',  default='http://localhost:9100')
-    parser.add_argument('--service-url', default='http://localhost:8000')
-    parser.add_argument('--robot-ns',    default='robot1')
-    parser.add_argument('--robot-id',    type=int, default=1)
+    parser.add_argument('--bridge-url',  default=os.getenv('BRIDGE_NODE_URL', 'http://localhost:9100'))
+    parser.add_argument('--service-url', default=_svc_base)
+    parser.add_argument('--robot-ns',    default=os.getenv('ROBOT_NAMESPACE', 'malle_1'))
+    parser.add_argument('--robot-id',    type=int, default=int(os.getenv('ROBOT_ID', '1')))
     args = parser.parse_args()
 
     print(f'\n{"═"*50}')

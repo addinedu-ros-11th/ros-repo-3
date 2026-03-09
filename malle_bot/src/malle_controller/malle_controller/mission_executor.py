@@ -17,8 +17,15 @@ mission_executor.py — HTTP 기반 미션 디스패처
                                                              └─ ApiClient.update_guide_item(ARRIVED)
 """
 
+import os
 import threading
 from enum import Enum, auto
+
+try:
+    from dotenv import load_dotenv, find_dotenv
+    load_dotenv(find_dotenv())
+except ImportError:
+    pass
 
 import rclpy
 from rclpy.node import Node
@@ -63,7 +70,7 @@ class MissionExecutor(Node, NavCore):
         self.nav_core_init(self)
 
         # 2. ROS 2 파라미터 선언 및 읽어오기 추가
-        self.declare_parameter('api_base_url', 'http://localhost:8000/api/v1')
+        self.declare_parameter('api_base_url', os.getenv('MALLE_SERVICE_URL', 'http://localhost:8000/api/v1'))
         api_base_url = self.get_parameter('api_base_url').value
 
         self.state           = RobotState.IDLE

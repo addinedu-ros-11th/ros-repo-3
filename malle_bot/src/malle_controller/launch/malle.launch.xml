@@ -1,9 +1,9 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
-  <arg name="robot_id"        default="1"/>
-  <arg name="robot_ns"        default="malle_15"/>
-  <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
-  <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
+  <arg name="robot_id"        default="$(optenv ROBOT_ID 1)"/>
+  <arg name="robot_ns"        default="$(optenv ROBOT_NAMESPACE malle_1)"/>
+  <arg name="api_base_url"    default="$(optenv MALLE_SERVICE_URL http://localhost:8000/api/v1)"/>
+  <arg name="lockbox_iface"   default="$(optenv LOCKBOX_IFACE mock)"/>  <!-- mock | gpio | serial -->
 
   <!-- ===== mission_executor  –  미션 상태 디스패처 ===== -->
   <node pkg="malle_controller" exec="mission_executor" name="mission_executor"
@@ -43,6 +43,6 @@
   <!-- ===== cam_node ===== -->
   <node pkg="malle_controller" exec="cam_node" name="cam_node"
         output="screen">
-    <env name="CAMERA_FPS" value="15"/>
+    <env name="CAMERA_FPS" value="$(optenv CAMERA_FPS 15)"/>
   </node>
 </launch>

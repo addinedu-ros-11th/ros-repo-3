@@ -17,6 +17,13 @@ import argparse
 import subprocess
 import sys
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
 
 HERE     = os.path.dirname(os.path.abspath(__file__))
 SVC_DIR  = os.path.join(HERE, "..", "malle_service")
@@ -51,18 +58,22 @@ def run(label: str, cmd: list[str], cwd: str = HERE) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="전체 테스트 실행기")
-    parser.add_argument("--url", default="http://localhost:8000",
-                        help="malle_service URL (기본값: http://localhost:8000)")
+    _svc_url = os.getenv("MALLE_SERVICE_URL", "http://localhost:8000/api/v1")
+    _svc_base = _svc_url.rsplit("/api/", 1)[0] if "/api/" in _svc_url else _svc_url
+
+    parser.add_argument("--url", default=_svc_base,
+                        help="malle_service URL (기본값: MALLE_SERVICE_URL 또는 http://localhost:8000)")
     parser.add_argument("--integration", action="store_true",
                         help="HTTP 통합 테스트 실행 (서버 필요)")
     parser.add_argument("--api-tests", action="store_true",
                         help="malle_service/tests/ 전체 API 테스트 실행 (서버 필요)")
     # test_occupied_mutex.py 인자
-    parser.add_argument("--robot-a",   type=int, default=None)
-    parser.add_argument("--robot-b",   type=int, default=None)
-    parser.add_argument("--session-b", type=int, default=None)
-    parser.add_argument("--poi",       type=int, default=None)
-    parser.add_argument("--hold",      type=int, default=5)
+    _env_int = lambda k: int(os.getenv(k)) if os.getenv(k) else None
+    parser.add_argument("--robot-a",   type=int, default=_env_int("TEST_ROBOT_A"))
+    parser.add_argument("--robot-b",   type=int, default=_env_int("TEST_ROBOT_B"))
+    parser.add_argument("--session-b", type=int, default=_env_int("TEST_SESSION_B"))
+    parser.add_argument("--poi",       type=int, default=_env_int("TEST_POI_ID"))
+    parser.add_argument("--hold",      type=int, default=int(os.getenv("TEST_HOLD_SEC", "5")))
     args = parser.parse_args()
 
     results: list[tuple[str, str]] = []   # (label, "pass"|"fail"|"skip")
