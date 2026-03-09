@@ -14,8 +14,13 @@ bridge_node가 오프라인이어도 예외를 던지지 않고 False 반환.
 
 import logging
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 import httpx
+
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 

@@ -25,7 +25,7 @@ CORS_ORIGINS: list[str] = os.getenv(
 
 # --- Internal services ---
 AI_SERVICE_URL: str = os.getenv("AI_SERVICE_URL", "http://localhost:5000")
-BRIDGE_BASE_URL: str = os.getenv("BRIDGE_BASE_URL", "http://localhost:9100")
+BRIDGE_NODE_URL: str = os.getenv("BRIDGE_NODE_URL", "http://localhost:9100")
 
 # --- Server ---
 HOST: str = os.getenv("HOST", "0.0.0.0")
@@ -39,6 +39,6 @@ class Config(BaseSettings):
     POI_STOP_TIME_SEC: int = 30  # POI당 정지 시간 (초)
     
     # 수정된 부분: Pydantic V2 방식의 설정 및 extra='ignore' 추가
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_env_file), extra="ignore")
 
 settings = Config()

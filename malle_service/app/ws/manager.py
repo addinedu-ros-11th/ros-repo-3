@@ -4,6 +4,11 @@ import json
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 

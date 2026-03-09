@@ -16,6 +16,12 @@ import os
 import threading
 import time
 
+try:
+    from dotenv import load_dotenv, find_dotenv
+    load_dotenv(find_dotenv())
+except ImportError:
+    pass  # python-dotenv 없으면 환경변수를 그대로 사용
+
 import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor

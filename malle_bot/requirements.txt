@@ -292,6 +292,7 @@ pyserial==3.5
 pytest==7.4.4
 pytest-cov==4.1.0
 python-apt==2.7.7+ubuntu5
+python-dotenv>=1.0.0
 python-dateutil==2.8.2
 python-debian==0.1.49+ubuntu2
 python-json-logger==3.3.0

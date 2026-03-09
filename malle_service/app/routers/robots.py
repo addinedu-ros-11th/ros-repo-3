@@ -20,7 +20,7 @@ from app.schemas.robot import (
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count, get_occupied_poi_ids
-from app.config import BRIDGE_BASE_URL
+from app.config import BRIDGE_NODE_URL
 from app.utils.bridge import register_bridge_url, send_to_bridge
 
 router = APIRouter()
@@ -319,7 +319,7 @@ async def camera_stream(robot_id: int, db: AsyncSession = Depends(get_db)):
         try:
             async with httpx.AsyncClient(timeout=None) as client:
                 async with client.stream(
-                    "GET", f"{BRIDGE_BASE_URL}/camera/{robot_id}/stream"
+                    "GET", f"{BRIDGE_NODE_URL}/camera/{robot_id}/stream"
                 ) as resp:
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
                         yield chunk
@@ -341,7 +341,7 @@ async def camera_snapshot(robot_id: int, db: AsyncSession = Depends(get_db)):
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{BRIDGE_BASE_URL}/camera/{robot_id}/snapshot")
+            resp = await client.get(f"{BRIDGE_NODE_URL}/camera/{robot_id}/snapshot")
             return StreamingResponse(iter([resp.content]), media_type="image/jpeg")
     except (httpx.ConnectError, httpx.TimeoutException):
         raise HTTPException(status_code=503, detail="Camera unavailable")
