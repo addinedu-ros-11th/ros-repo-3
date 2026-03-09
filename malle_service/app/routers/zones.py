@@ -160,22 +160,23 @@ async def update_zone(zone_id: int, req: ZoneUpdateRequest, db: AsyncSession = D
     if not zone:
         raise HTTPException(status_code=404, detail="Zone not found")
 
+    values: dict = {"updated_at": datetime.utcnow()}
     if req.name is not None:
-        zone.name = req.name
+        values["name"] = req.name
     if req.zone_type is not None:
-        zone.zone_type = req.zone_type
+        values["zone_type"] = req.zone_type
     if req.is_active is not None:
-        zone.is_active = req.is_active
+        values["is_active"] = req.is_active
     if req.priority is not None:
-        zone.priority = req.priority
+        values["priority"] = req.priority
     if req.speed_limit_mps is not None:
-        zone.speed_limit_mps = req.speed_limit_mps
+        values["speed_limit_mps"] = req.speed_limit_mps
     if req.one_way is not None:
-        zone.one_way = req.one_way
+        values["one_way"] = req.one_way
     if req.enhanced_avoidance is not None:
-        zone.enhanced_avoidance = req.enhanced_avoidance
-    zone.updated_at = datetime.utcnow()
+        values["enhanced_avoidance"] = req.enhanced_avoidance
 
+    await db.execute(update(Zone).where(Zone.id == zone_id).values(**values))
     await db.flush()
 
     # Polygon update requires ST_GeomFromText (geometry function)
@@ -193,9 +194,15 @@ async def update_zone(zone_id: int, req: ZoneUpdateRequest, db: AsyncSession = D
     polygon_wkt = wkt_row.scalar() or ""
 
     zone_dict = _zone_to_dict(
-        zone.id, zone.name, zone.zone_type, polygon_wkt,
-        zone.is_active, zone.priority, zone.speed_limit_mps,
-        zone.one_way, zone.enhanced_avoidance,
+        zone.id,
+        values.get("name", zone.name),
+        values.get("zone_type", zone.zone_type),
+        polygon_wkt,
+        values.get("is_active", zone.is_active),
+        values.get("priority", zone.priority),
+        values.get("speed_limit_mps", zone.speed_limit_mps),
+        values.get("one_way", zone.one_way),
+        values.get("enhanced_avoidance", zone.enhanced_avoidance),
     )
     await _broadcast_zone_event("updated", zone_dict)
 

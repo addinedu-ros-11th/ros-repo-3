@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,10 +19,15 @@ from app.schemas.robot import (
 from app.ws.manager import manager
 from app.ws.events import WsEvent
 from app.services.robot_dispatcher import get_dispatch_status, get_available_robot_count, get_occupied_poi_ids
-from app.config import BRIDGE_BASE_URL
-from app.utils.bridge import register_bridge_url, send_to_bridge
+from app.utils.bridge import register_bridge_url, send_to_bridge, _bridge_registry
 
 router = APIRouter()
+
+
+@router.get("/robots/bridge-registry")
+async def bridge_registry():
+    """현재 등록된 bridge_node URL 목록 반환."""
+    return {"registry": _bridge_registry}
 
 
 @router.get("/robots", response_model=RobotListResponse)
@@ -308,40 +312,3 @@ async def send_command(
     return {"ok": True, "robot_id": robot_id, "command": req.command, "bridge_connected": bridge_ok}
 
 
-@router.get("/robots/{robot_id}/camera/stream")
-async def camera_stream(robot_id: int, db: AsyncSession = Depends(get_db)):
-    """MJPEG 스트림을 bridge_node에서 프록시."""
-    robot = await db.get(Robot, robot_id)
-    if not robot:
-        raise HTTPException(status_code=404, detail="Robot not found")
-
-    async def generate():
-        try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "GET", f"{BRIDGE_BASE_URL}/camera/{robot_id}/stream"
-                ) as resp:
-                    async for chunk in resp.aiter_bytes(chunk_size=8192):
-                        yield chunk
-        except (httpx.ConnectError, httpx.TimeoutException):
-            pass  # 클라이언트에서 연결 종료 시 조용히 종료
-
-    return StreamingResponse(
-        generate(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
-
-
-@router.get("/robots/{robot_id}/camera/snapshot")
-async def camera_snapshot(robot_id: int, db: AsyncSession = Depends(get_db)):
-    """단일 JPEG 스냅샷을 bridge_node에서 프록시."""
-    robot = await db.get(Robot, robot_id)
-    if not robot:
-        raise HTTPException(status_code=404, detail="Robot not found")
-
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(f"{BRIDGE_BASE_URL}/camera/{robot_id}/snapshot")
-            return StreamingResponse(iter([resp.content]), media_type="image/jpeg")
-    except (httpx.ConnectError, httpx.TimeoutException):
-        raise HTTPException(status_code=503, detail="Camera unavailable")

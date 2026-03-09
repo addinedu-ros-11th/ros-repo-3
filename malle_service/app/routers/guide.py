@@ -244,10 +244,11 @@ async def execute_guide_queue(session_id: int, db: AsyncSession = Depends(get_db
     poi = await db.get(Poi, first_item.poi_id)
 
     occupied = await get_occupied_poi_ids(db, exclude_robot_id=session.assigned_robot_id)
-    if first_item.poi_id in occupied:
+    blocked_poi = next((item.poi_id for item in pending if item.poi_id in occupied), None)
+    if blocked_poi is not None:
         raise HTTPException(
             status_code=409,
-            detail="Target POI is currently occupied by another robot in a narrow section",
+            detail=f"Target POI {blocked_poi} is currently occupied by another robot in a narrow section",
         )
 
     robot_state_result = await db.execute(

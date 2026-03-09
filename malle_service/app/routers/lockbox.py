@@ -220,7 +220,7 @@ async def verify_lockbox_token(
     if not token:
         raise HTTPException(status_code=400, detail="Invalid or used token")
 
-    if datetime.now(timezone.utc) > token.expires_at:
+    if datetime.now(timezone.utc) > token.expires_at.replace(tzinfo=timezone.utc):
         raise HTTPException(status_code=400, detail="Token expired")
 
     token.used_at = datetime.now(timezone.utc)
