@@ -21,7 +21,7 @@ class MissionErrandNode(Node, NavCore):
 
     def __init__(self):
         Node.__init__(self, 'mission_errand')
-        self.nav_core_init(self)
+        self.nav_core_init(self, enable_tag_correction=False)
 
         self._api = ApiClient(
             base_url=self.declare_parameter('api_base_url', 'http://localhost:8000').value,

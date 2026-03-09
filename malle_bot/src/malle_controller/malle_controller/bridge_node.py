@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 from typing import Optional
+from geometry_msgs.msg import PoseWithCovarianceStamped
 
 import httpx
 
@@ -378,7 +379,9 @@ if HAS_ROS2:
             self.create_subscription(Float32, TOPIC_BATTERY, self._battery_cb, 10)
             self.create_subscription(String, TOPIC_NAV_MODE, self._nav_mode_cb, 10)
             self.create_subscription(RosImage, '/camera/image_raw', self._image_cb, 1)
+            self.create_subscription(PoseWithCovarianceStamped, '/amcl_pose', self._amcl_cb, 10)
             self.get_logger().info(f"  odom:    {TOPIC_ODOM}")
+            self.get_logger().info(f"  amcl:    /amcl_pose")
             self.get_logger().info(f"  battery: {TOPIC_BATTERY}")
             self.get_logger().info(f"  nav_mode: {TOPIC_NAV_MODE}")
 
@@ -395,11 +398,11 @@ if HAS_ROS2:
             self.create_timer(1.0, self._push_occupied_poi_ids)
             self.get_logger().info("Bridge ready.")
 
-        def _odom_cb(self, msg: Odometry):
-            self._state["x_m"] = round(msg.pose.pose.position.x, 3)
-            self._state["y_m"] = round(msg.pose.pose.position.y, 3)
-
-            q = msg.pose.pose.orientation
+        def _amcl_cb(self, msg):
+            p = msg.pose.pose
+            self._state["x_m"] = round(p.position.x, 3)
+            self._state["y_m"] = round(p.position.y, 3)
+            q = p.orientation
             self._state["theta_rad"] = round(
                 math.atan2(
                     2.0 * (q.w * q.z + q.x * q.y),
@@ -407,6 +410,8 @@ if HAS_ROS2:
                 ), 5
             )
 
+        def _odom_cb(self, msg: Odometry):
+            # 위치/heading은 /amcl_pose에서 갱신 — 여기선 속도만 처리
             vx = msg.twist.twist.linear.x
             vy = msg.twist.twist.linear.y
             self._state["speed_mps"] = round(math.sqrt(vx * vx + vy * vy), 3)
