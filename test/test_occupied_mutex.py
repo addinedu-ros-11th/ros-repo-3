@@ -64,6 +64,14 @@ def add_queue_item(session_id: int, poi_id: int) -> requests.Response:
     return api("post", f"/sessions/{session_id}/guide-queue", json={"poi_id": poi_id})
 
 
+def create_session(user_id: int) -> requests.Response:
+    return api("post", "/sessions", json={"user_id": user_id, "session_type": "TASK"})
+
+
+def end_session(session_id: int) -> requests.Response:
+    return api("post", f"/sessions/{session_id}/end")
+
+
 # ── 출력 헬퍼 ──────────────────────────────────────────────────────────────
 
 def check(cond: bool, msg: str) -> bool:
@@ -79,12 +87,48 @@ def step(n: int, desc: str):
 
 # ── 테스트 본체 ────────────────────────────────────────────────────────────
 
+def setup_session(user_id: int, required_robot_id: int | None) -> tuple[int, int] | None:
+    """
+    세션 생성 후 (session_id, assigned_robot_id) 반환.
+    required_robot_id가 지정된 경우, 다른 로봇에 배정되면 None 반환.
+    """
+    r = create_session(user_id)
+    if r.status_code != 200:
+        print(f"    {FAIL_MARK} 세션 생성 실패 ({r.status_code}): {r.text[:200]}")
+        return None
+    data = r.json()
+    session_id = data.get("id")
+    assigned_robot_id = data.get("assigned_robot_id")
+    if not session_id or not assigned_robot_id:
+        print(f"    {FAIL_MARK} 세션 생성 응답 이상: {data}")
+        return None
+    if required_robot_id and assigned_robot_id != required_robot_id:
+        print(f"    {FAIL_MARK} 세션이 로봇 {assigned_robot_id}에 배정됨 (로봇 {required_robot_id} 필요)")
+        end_session(session_id)
+        return None
+    print(f"    {PASS_MARK} 세션 생성 (id={session_id}, assigned_robot={assigned_robot_id})")
+    return session_id, assigned_robot_id
+
+
 def run_test(args) -> bool:
     robot_a   = args.robot_a
-    robot_b   = args.robot_b
-    session_b = args.session_b
     poi_id    = args.poi
     hold      = args.hold
+
+    # ── 세션 준비 ──────────────────────────────────────────────────────────
+    if args.session_b:
+        session_b = args.session_b
+        robot_b   = args.robot_b
+    else:
+        print(f"\n[SETUP] 테스트 세션 생성 (user_id={args.user_id})")
+        result = setup_session(args.user_id, args.robot_b)
+        if result is None:
+            return False
+        session_b, robot_b = result
+        if robot_b == robot_a:
+            print(f"    {FAIL_MARK} 세션이 로봇A({robot_a})에 배정됨 — 다른 로봇이 필요")
+            end_session(session_b)
+            return False
 
     passed = 0
     failed = 0
@@ -246,12 +290,17 @@ def run_test(args) -> bool:
     return failed == 0
 
 
-def cleanup(robot_a: int):
-    """테스트 후 로봇A 상태 초기화 (안전망)."""
+def cleanup(robot_a: int, session_b: int | None = None, created: bool = False):
+    """테스트 후 로봇A 상태 초기화 및 생성한 세션 종료 (안전망)."""
     try:
         patch_robot_state(robot_a, nav_state="IDLE")
     except Exception:
         pass
+    if created and session_b:
+        try:
+            end_session(session_b)
+        except Exception:
+            pass
 
 
 # ── 진입점 ─────────────────────────────────────────────────────────────────
@@ -276,10 +325,12 @@ def main():
                         help="malle_service 기본 URL (기본값: http://localhost:8000)")
     parser.add_argument("--robot-a",   type=int, required=True,
                         help="점유 로봇 ID — PID 구간 진입을 시뮬레이션")
-    parser.add_argument("--robot-b",   type=int, required=True,
-                        help="대기 로봇 ID — execute 차단 후 자동 재실행 대상")
-    parser.add_argument("--session-b", type=int, required=True,
-                        help="로봇B에 배정된 세션 ID")
+    parser.add_argument("--robot-b",   type=int, default=None,
+                        help="대기 로봇 ID — 생략 시 세션 자동 생성 후 배정된 로봇 사용")
+    parser.add_argument("--session-b", type=int, default=None,
+                        help="로봇B에 배정된 세션 ID — 생략 시 자동 생성")
+    parser.add_argument("--user-id",   type=int, default=1,
+                        help="세션 자동 생성 시 사용할 user_id (기본값: 1)")
     parser.add_argument("--poi",       type=int, required=True,
                         help="충돌 테스트용 목적지 POI ID")
     parser.add_argument("--hold",      type=int, default=5,
@@ -292,13 +343,16 @@ def main():
     global BASE
     BASE = f"{args.url.rstrip('/')}/api/v1"
 
+    created_session = args.session_b is None
+    session_b_id = args.session_b
+
     try:
         success = run_test(args)
     except KeyboardInterrupt:
         print("\n\n테스트 중단됨")
         success = False
     finally:
-        cleanup(args.robot_a)
+        cleanup(args.robot_a, session_b_id, created=created_session)
 
     sys.exit(0 if success else 1)
 

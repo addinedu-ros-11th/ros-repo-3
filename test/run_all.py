@@ -33,7 +33,7 @@ SKIP = "\033[33mSKIP\033[0m"
 def server_alive(url: str) -> bool:
     try:
         import requests
-        r = requests.get(f"{url}/health", timeout=2)
+        r = requests.get(f"{url}/docs", timeout=2)
         return r.status_code == 200
     except Exception:
         return False
@@ -63,6 +63,8 @@ def main():
     parser.add_argument("--session-b", type=int, default=None)
     parser.add_argument("--poi",       type=int, default=None)
     parser.add_argument("--hold",      type=int, default=5)
+    parser.add_argument("--user-id",   type=int, default=1)
+    parser.add_argument("--add-item",  action="store_true")
     args = parser.parse_args()
 
     results: list[tuple[str, str]] = []   # (label, "pass"|"fail"|"skip")
@@ -86,22 +88,25 @@ def main():
             print(f"\n[{SKIP}] HTTP 통합 테스트 — 서버 응답 없음 ({args.url})")
             results.append(("HTTP 통합 테스트 (test_occupied_mutex)", "skip"))
         else:
-            required = [args.robot_a, args.robot_b, args.session_b, args.poi]
-            if any(v is None for v in required):
-                print(f"\n[{SKIP}] HTTP 통합 테스트 — --robot-a/b, --session-b, --poi 필요")
+            if args.robot_a is None or args.poi is None:
+                print(f"\n[{SKIP}] HTTP 통합 테스트 — --robot-a, --poi 필요")
                 results.append(("HTTP 통합 테스트 (test_occupied_mutex)", "skip"))
             else:
                 mutex_cmd = [
                     sys.executable,
                     os.path.join(HERE, "test_occupied_mutex.py"),
-                    "--url",      args.url,
-                    "--robot-a",  str(args.robot_a),
-                    "--robot-b",  str(args.robot_b),
-                    "--session-b",str(args.session_b),
-                    "--poi",      str(args.poi),
-                    "--hold",     str(args.hold),
-                    "--add-item",
+                    "--url",     args.url,
+                    "--robot-a", str(args.robot_a),
+                    "--poi",     str(args.poi),
+                    "--hold",    str(args.hold),
+                    "--user-id", str(args.user_id),
                 ]
+                if args.robot_b is not None:
+                    mutex_cmd += ["--robot-b", str(args.robot_b)]
+                if args.session_b is not None:
+                    mutex_cmd += ["--session-b", str(args.session_b)]
+                if args.add_item:
+                    mutex_cmd.append("--add-item")
                 ok = run("HTTP 통합 테스트 (test_occupied_mutex)", mutex_cmd)
                 results.append(("HTTP 통합 테스트 (test_occupied_mutex)", "pass" if ok else "fail"))
 
