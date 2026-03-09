@@ -519,7 +519,11 @@ class NavCore:
         # Nav2가 먼저 완료됨
         if self._nav_mode == 'PID':
             # zone_check가 Nav2를 취소하고 PID 진행 중 → PID 완료 대기
-            done_event.wait()
+            if not done_event.wait(timeout=30.0):
+                self._node.get_logger().error('[NavCore] PID 완료 타임아웃 (30s)')
+                self._cancel_timer('pid')
+                self._nav_mode = 'IDLE'
+                return False
             return result_store[0]
 
         # PID 전환 없이 Nav2 직접 완료
