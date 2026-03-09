@@ -17,20 +17,25 @@
       ros2 launch malle_controller bridge.launch.xml robot_namespace:=malle_15 robot_id:=1
   -->
 
-  <arg name="malle_service_url" default="$(optenv MALLE_SERVICE_URL http://localhost:8000/api/v1)"/>
-  <arg name="bridge_http_port"  default="$(optenv BRIDGE_HTTP_PORT 9100)"/>
-  <arg name="robot_namespace"   default="$(optenv ROBOT_NAMESPACE malle_1)"/>
-  <arg name="robot_id"          default="$(optenv ROBOT_ID 1)"/>
+  <!-- ROS2 DDS 도메인 — 로봇과 동일한 값으로 설정 -->
+  <set_env name="ROS_DOMAIN_ID"    value="$(optenv ROS_DOMAIN_ID 0)"/>
+  <!-- 다른 서브넷일 때만 설정 (같은 서브넷이면 비워도 됨) -->
+  <set_env name="ROS_STATIC_PEERS" value="$(optenv ROS_STATIC_PEERS )"/>
+
+  <arg name="malle_service_url"  default="$(optenv MALLE_SERVICE_URL http://localhost:8000/api/v1)"/>
+  <arg name="bridge_http_port"   default="$(optenv BRIDGE_HTTP_PORT 9100)"/>
+  <arg name="robot_namespace"    default="$(optenv ROBOT_NAMESPACE malle_1)"/>
+  <arg name="robot_id"           default="$(optenv ROBOT_ID 1)"/>
+  <arg name="bridge_self_url"    default="$(optenv BRIDGE_SELF_URL )"/>
+  <arg name="camera_push_enabled" default="$(optenv CAMERA_PUSH_ENABLED 1)"/>
 
   <node pkg="malle_controller" exec="bridge_node" name="bridge_node"
         output="screen">
-    <!--
-      bridge_node 는 환경변수로 설정을 읽는다.
-      launch 에서 env 태그로 주입한다.
-    -->
-    <env name="MALLE_SERVICE_URL" value="$(var malle_service_url)"/>
-    <env name="BRIDGE_HTTP_PORT"  value="$(var bridge_http_port)"/>
-    <env name="ROBOT_NAMESPACE"   value="$(var robot_namespace)"/>
-    <env name="ROBOT_ID"          value="$(var robot_id)"/>
+    <env name="MALLE_SERVICE_URL"    value="$(var malle_service_url)"/>
+    <env name="BRIDGE_HTTP_PORT"     value="$(var bridge_http_port)"/>
+    <env name="ROBOT_NAMESPACE"      value="$(var robot_namespace)"/>
+    <env name="ROBOT_ID"             value="$(var robot_id)"/>
+    <env name="BRIDGE_SELF_URL"      value="$(var bridge_self_url)"/>
+    <env name="CAMERA_PUSH_ENABLED"  value="$(var camera_push_enabled)"/>
   </node>
 </launch>

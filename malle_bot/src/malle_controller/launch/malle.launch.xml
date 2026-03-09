@@ -1,4 +1,8 @@
 <launch>
+  <!-- ===== ROS2 DDS 설정 ===== -->
+  <set_env name="ROS_DOMAIN_ID"    value="$(optenv ROS_DOMAIN_ID 0)"/>
+  <set_env name="ROS_STATIC_PEERS" value="$(optenv ROS_STATIC_PEERS )"/>
+
   <!-- ===== 공통 인수 ===== -->
   <arg name="robot_id"        default="$(optenv ROBOT_ID 1)"/>
   <arg name="robot_ns"        default="$(optenv ROBOT_NAMESPACE malle_1)"/>
@@ -43,6 +47,8 @@
   <!-- ===== cam_node ===== -->
   <node pkg="malle_controller" exec="cam_node" name="cam_node"
         output="screen">
-    <env name="CAMERA_FPS" value="$(optenv CAMERA_FPS 15)"/>
+    <env name="CAMERA_WIDTH"  value="$(optenv CAMERA_WIDTH 640)"/>
+    <env name="CAMERA_HEIGHT" value="$(optenv CAMERA_HEIGHT 480)"/>
+    <env name="CAMERA_FPS"    value="$(optenv CAMERA_FPS 15)"/>
   </node>
 </launch>
