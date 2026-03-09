@@ -14,6 +14,8 @@ from nav2_msgs.action import NavigateToPose
 
 import ament_index_python.packages as ament
 
+from malle_controller.pid_edges import get_pid_radius
+
 # 네비게이션 상수
 MAX_LINEAR_VEL      = 0.15          # PID 최대 선속도 (m/s)
 MAX_ANGULAR_VEL     = 1.0           # PID 최대 각속도 (rad/s)
@@ -107,7 +109,8 @@ def _load_apriltag_config(yaml_path: str | None = None) -> tuple[dict, tuple, fl
 class NavCore:
     """Nav2 + PID + 웨이포인트 경로 계획 공용 엔진 (Node 믹스인용)."""
 
-    def nav_core_init(self, node: Node, waypoint_yaml: str | None = None):
+    def nav_core_init(self, node: Node, waypoint_yaml: str | None = None,
+                      enable_tag_correction: bool = True):
         """미션 노드의 __init__에서 호출."""
         self._node = node
 
@@ -169,6 +172,10 @@ class NavCore:
         self._tag_frame           = None
         self._tag_frame_lock      = threading.Lock()
         self._tag_last_correction = None
+
+        if not enable_tag_correction:
+            node.get_logger().info('[NavCore] AprilTag 교정 비활성화 (enable_tag_correction=False)')
+            return
 
         try:
             import cv2 as _cv2
@@ -319,7 +326,7 @@ class NavCore:
 
         # 도착 판정
         if dist < ARRIVAL_THRESHOLD:
-            self.stop()
+            self.cmd_vel(0.0, 0.0)   # NavCore 모터 정지 (stop()은 서브클래스에서 override되므로 직접 호출)
             self._cancel_timer('pid')
             self._nav_mode = 'IDLE'
             self._pub_nav_mode('IDLE')
@@ -391,15 +398,25 @@ class NavCore:
         )
 
         # 4. 경유 웨이포인트 순차 이동 (마지막 wp는 최종 목적지로 대체)
-        for wp_id in path[:-1]:
+        for i, wp_id in enumerate(path[:-1]):
             if self._nav_abort:
                 self._node.get_logger().info("[NavCore] 웨이포인트 주행 중단")
                 return
 
+            prev_wp = path[i - 1] if i > 0 else ''
             wp = self._wp_points[wp_id]
-            self._node.get_logger().info(f"[NavCore] → 웨이포인트 [{wp_id}]")
+            wp_pid_r = get_pid_radius(prev_wp, wp_id)
 
-            success = self._blocking_navigate(wp["x"], wp["y"], 0.0)
+            self._node.get_logger().info(
+                f"[NavCore] → 웨이포인트 [{wp_id}]"
+                + (f" [PID r={wp_pid_r:.2f}m]" if wp_pid_r > 0 else "")
+            )
+
+            if wp_pid_r > 0.0:
+                success = self._blocking_navigate_with_pid(wp["x"], wp["y"], 0.0, wp_pid_r)
+            else:
+                success = self._blocking_navigate(wp["x"], wp["y"], 0.0)
+
             if not success:
                 self._node.get_logger().warn(
                     f"[NavCore] [{wp_id}] 이동 실패 — 주행 중단"

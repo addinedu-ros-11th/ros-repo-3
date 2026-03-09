@@ -34,7 +34,7 @@ class GuideExecutor(NavCore):
     """
 
     def __init__(self, node: Node, api: ApiClient, poi_mgr: PoiManager):
-        self.nav_core_init(node)
+        self.nav_core_init(node, enable_tag_correction=False)
         self._node    = node
         self._api     = api
         self._poi_mgr = poi_mgr
@@ -60,7 +60,7 @@ class GuideExecutor(NavCore):
             self._queue          = deque(queue_items)
             self._active         = True
             self._waiting_at_poi = False
-            self._prev_poi_id    = ''
+            self._prev_wp_id     = ''
 
         self._log.info(
             f'[GuideExecutor] 시작 session={session_id} '
@@ -205,7 +205,7 @@ class GuideExecutor(NavCore):
     """
 
     def __init__(self, node: Node, api: ApiClient, poi_mgr: PoiManager):
-        self.nav_core_init(node)
+        self.nav_core_init(node, enable_tag_correction=False)
         self._node    = node
         self._api     = api
         self._poi_mgr = poi_mgr
@@ -216,7 +216,7 @@ class GuideExecutor(NavCore):
         self._session_id: int | None = None
         self._queue: deque[dict] = deque()  # guide_queue_item dicts
         self._current_item: dict | None = None
-        self._prev_poi_id: str = ''    # PID edge 판단용 이전 POI
+        self._prev_wp_id: str = ''     # PID edge 판단용 이전 waypoint ID
         self._lock = threading.Lock()
         self._locked_zone_id: int | None = None
 
@@ -232,7 +232,7 @@ class GuideExecutor(NavCore):
             self._queue          = deque(queue_items)
             self._active         = True
             self._waiting_at_poi = False
-            self._prev_poi_id    = ''
+            self._prev_wp_id     = ''
 
         self._log.info(
             f'[GuideExecutor] 시작 session={session_id} '
@@ -316,26 +316,28 @@ class GuideExecutor(NavCore):
             self._navigate_next()
             return
 
-        pid_radius = get_pid_radius(self._prev_poi_id, str(poi_id))
-        self._prev_poi_id = str(poi_id)
+        # 목적지 좌표에서 가장 가까운 waypoint를 기준으로 PID 구간 판단
+        nearest_wp, _ = self._nearest_waypoint(x, y) if self._wp_points else ('', float('inf'))
+        pid_radius = get_pid_radius(self._prev_wp_id, nearest_wp)
+        self._prev_wp_id = nearest_wp
 
         self._log.info(
             f'[GuideExecutor] → {poi_name} '
-            f'item_id={item_id} ({x:.3f}, {y:.3f})'
+            f'item_id={item_id} ({x:.3f}, {y:.3f}) wp={nearest_wp}'
             + (f' [PID r={pid_radius:.2f}m]' if pid_radius > 0 else '')
         )
 
-        # PID 구간 진입 시 zone 활성화
+        # PID 구간 진입 시 zone 활성화 (zone 이름: pid_lock_{waypoint_id})
         if pid_radius > 0:
-            zone_id = self._api.find_pid_lock_zone_id(str(poi_id))
+            zone_id = self._api.find_pid_lock_zone_id(nearest_wp)
             if zone_id:
                 self._api.set_zone_active(zone_id, True)
                 self._log.info(
-                    f'[GuideExecutor] zone 활성화: poi={poi_id} zone_id={zone_id}'
+                    f'[GuideExecutor] zone 활성화: wp={nearest_wp} zone_id={zone_id}'
                 )
             else:
                 self._log.warn(
-                    f'[GuideExecutor] pid_lock_{poi_id} zone 없음 — seed 확인 필요'
+                    f'[GuideExecutor] pid_lock_{nearest_wp} zone 없음 — seed 확인 필요'
                 )
             with self._lock:
                 self._locked_zone_id = zone_id
