@@ -22,15 +22,15 @@ tags:
 #    yaw: -1.572
   6:             # Starbucks
     yaw: -3.116
-  7:             # Hi_Mart
-    yaw: 1.416
+#  7:             # Hi_Mart
+#    yaw: 1.416
 #  8:             # North_Face
 #    yaw: 1.572
 #  9:             # 8_Seconds
 #    yaw: 1.572
 #  10:            # Top10
 #    yaw: 1.572
-  14:            # Pop_up
-    yaw: -2.484
-  15:            # Vendor
-    yaw: -1.572
+#  14:            # Pop_up
+#    yaw: -2.484
+#  15:            # Vendor
+#    yaw: -1.572
