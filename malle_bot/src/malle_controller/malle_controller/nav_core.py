@@ -14,7 +14,7 @@ from nav2_msgs.action import NavigateToPose
 
 import ament_index_python.packages as ament
 
-from malle_controller.pid_edges import get_pid_radius
+from malle_controller.pid_edges import get_pid_radius, CORRIDOR_WAYPOINTS
 
 # 네비게이션 상수
 MAX_LINEAR_VEL      = 0.12          # PID 최대 선속도 (m/s)
@@ -400,8 +400,15 @@ class NavCore:
         )
 
         # 4. 경유 웨이포인트 순차 이동 (마지막 wp는 최종 목적지로 대체)
+        # 경로에 CORRIDOR_WAYPOINTS가 포함되면 복도 전체를 미리 단일 lock으로 선점
+        uses_corridor = any(wp_id in CORRIDOR_WAYPOINTS for wp_id in path)
+        if uses_corridor and self._narrow_section_cb:
+            self._narrow_section_cb('_corridor_', 'acquire')
+
         for i, wp_id in enumerate(path[:-1]):
             if self._nav_abort:
+                if uses_corridor and self._narrow_section_cb:
+                    self._narrow_section_cb('_corridor_', 'release')
                 self._node.get_logger().info("[NavCore] 웨이포인트 주행 중단")
                 return
 
@@ -415,11 +422,7 @@ class NavCore:
             )
 
             if wp_pid_r > 0.0:
-                if self._narrow_section_cb:
-                    self._narrow_section_cb(wp_id, 'acquire')
                 success = self._blocking_navigate_with_pid(wp["x"], wp["y"], 0.0, wp_pid_r)
-                if self._narrow_section_cb:
-                    self._narrow_section_cb(wp_id, 'release')
             else:
                 success = self._blocking_navigate(wp["x"], wp["y"], 0.0)
 
@@ -445,6 +448,9 @@ class NavCore:
             )
         else:
             success = self._blocking_navigate(target_x, target_y, target_yaw)
+
+        if uses_corridor and self._narrow_section_cb:
+            self._narrow_section_cb('_corridor_', 'release')
 
         self._pub_nav_mode('IDLE')
         if done_callback:

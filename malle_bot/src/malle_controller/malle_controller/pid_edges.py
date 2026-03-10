@@ -17,6 +17,9 @@ PID_DESTINATIONS: dict[str, float] = {
 
 DEFAULT_PID_RADIUS = 0.0  # 명시된 구간 외에는 PID 없이 Nav2만 사용
 
+# 하나의 공유 복도로 관리되는 waypoint 집합 — 이 중 하나라도 점유 시 전체 차단
+CORRIDOR_WAYPOINTS: frozenset[str] = frozenset({'p6', 'p8'})
+
 def get_pid_radius(prev_poi: str, next_poi: str) -> float:
     """(prev_poi, next_poi) 엣지에 맞는 PID 진입 반경 반환."""
     edge = (prev_poi, next_poi)
