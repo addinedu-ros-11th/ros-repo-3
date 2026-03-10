@@ -44,8 +44,9 @@ TOPIC_CMD_VEL_TELEOP = "/cmd_vel"
 TOPIC_PREEMPT_TELEOP = "/preempt_teleop"
 TOPIC_TASK_COMMAND   = "/task_command"
 
-TOPIC_NAV_MODE           = "/nav_mode"
-TOPIC_OCCUPIED_POI_IDS   = "/occupied_poi_ids"
+_NS = ROBOT_NAMESPACE.strip("/")
+TOPIC_NAV_MODE           = f"/{_NS}/nav_mode" if _NS else "/nav_mode"
+TOPIC_OCCUPIED_POI_IDS   = f"/{_NS}/occupied_poi_ids" if _NS else "/occupied_poi_ids"
 
 JPEG_QUALITY        = 70
 STREAM_MAX_FPS      = 15

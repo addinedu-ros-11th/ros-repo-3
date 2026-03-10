@@ -12,12 +12,15 @@
       3. malle_service 가 로컬에서 실행 중일 것 (기본 8000 포트)
 
     실행:
-      ros2 launch malle_controller bridge.launch.xml
-      ros2 launch malle_controller bridge.launch.xml malle_service_url:=http://192.168.1.18:8000/api/v1 robot_namespace:=malle_17 robot_id:=2
+      ros2 launch malle_controller bridge.launch.xml \
+        malle_service_url:=http://192.168.1.18:8000/api/v1 \
+        robot_namespace:=malle_17 robot_id:=2 \
+        bridge_self_url:=http://<로봇IP>:9100
   -->
 
   <arg name="malle_service_url" default="http://localhost:8000/api/v1"/>
   <arg name="bridge_http_port"  default="9100"/>
+  <arg name="bridge_self_url"   default=""/>
   <arg name="robot_namespace"/>
   <arg name="robot_id"/>
 
@@ -29,6 +32,7 @@
     -->
     <env name="MALLE_SERVICE_URL" value="$(var malle_service_url)"/>
     <env name="BRIDGE_HTTP_PORT"  value="$(var bridge_http_port)"/>
+    <env name="BRIDGE_SELF_URL"   value="$(var bridge_self_url)"/>
     <env name="ROBOT_NAMESPACE"   value="$(var robot_namespace)"/>
     <env name="ROBOT_ID"          value="$(var robot_id)"/>
   </node>
