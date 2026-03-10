@@ -156,17 +156,17 @@ class GuideExecutor(NavCore):
             + (f' [PID r={pid_radius:.2f}m]' if pid_radius > 0 else '')
         )
 
-        # PID 구간 진입 시 zone 활성화 (zone 이름: pid_lock_{waypoint_id})
+        # PID 구간 진입 시 zone 활성화 (zone 이름: pid_lock_{poi_name})
         if pid_radius > 0:
-            zone_id = self._api.find_pid_lock_zone_id(nearest_wp)
+            zone_id = self._api.find_pid_lock_zone_id(poi_name)
             if zone_id:
                 self._api.set_zone_active(zone_id, True)
                 self._log.info(
-                    f'[GuideExecutor] zone 활성화: wp={nearest_wp} zone_id={zone_id}'
+                    f'[GuideExecutor] zone 활성화: poi={poi_name} zone_id={zone_id}'
                 )
             else:
                 self._log.warn(
-                    f'[GuideExecutor] pid_lock_{nearest_wp} zone 없음 — seed 확인 필요'
+                    f'[GuideExecutor] pid_lock_{poi_name} zone 없음 — seed 확인 필요'
                 )
             with self._lock:
                 self._locked_zone_id = zone_id
