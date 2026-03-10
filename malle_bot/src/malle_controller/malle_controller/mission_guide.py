@@ -11,6 +11,7 @@ mission_guide.py — 가이드 미션 실행기
   5. Robot UI "Next Stop" / Mobile "Mark as Arrived" → advance() → DONE → 다음 항목
 """
 
+import os
 import threading
 
 from collections import deque
@@ -19,6 +20,8 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 import threading
+
+_ROBOT_ID = int(os.getenv("ROBOT_ID", "1"))
 
 from malle_controller.nav_core import NavCore
 from malle_controller.api_client import ApiClient
@@ -156,7 +159,7 @@ class GuideExecutor(NavCore):
             + (f' [PID r={pid_radius:.2f}m]' if pid_radius > 0 else '')
         )
 
-        # PID 구간 진입 시 zone 활성화 (zone 이름: pid_lock_{poi_name})
+        # PID 구간 진입 시 zone 활성화 + nav_state OCCUPIED push
         if pid_radius > 0:
             zone_id = self._api.find_pid_lock_zone_id(poi_name)
             if zone_id:
@@ -170,6 +173,12 @@ class GuideExecutor(NavCore):
                 )
             with self._lock:
                 self._locked_zone_id = zone_id
+            # malle_service에 OCCUPIED 상태 직접 push → 다른 로봇이 occupied_poi_ids로 감지
+            try:
+                self._api.patch(f'/robots/{_ROBOT_ID}/state',
+                                {'nav_state': 'OCCUPIED'})
+            except Exception:
+                pass
 
         self.navigate_via_waypoints(
             target_x=x, target_y=y, target_yaw=0.0,
@@ -221,6 +230,10 @@ class GuideExecutor(NavCore):
         if zone_id:
             self._api.set_zone_active(zone_id, False)
             self._log.info(f'[GuideExecutor] zone 비활성화: zone_id={zone_id}')
+            try:
+                self._api.patch(f'/robots/{_ROBOT_ID}/state', {'nav_state': 'IDLE'})
+            except Exception:
+                pass
 
 
 
