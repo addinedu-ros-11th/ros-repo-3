@@ -223,7 +223,6 @@ class NavCore:
         self._poi_id         = poi_id
         self._waiting_at_zone = False
         self._nav_mode       = 'NAV2'
-        self._pub_nav_mode('NAV2')
 
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
@@ -271,7 +270,6 @@ class NavCore:
         """진행 중인 Nav2 목표 및 PID 루프를 모두 취소."""
         self._nav_abort = True
         self._nav_mode  = 'IDLE'
-        self._pub_nav_mode('IDLE')
         self._poi_id = None
         self._waiting_at_zone = False
         self._cancel_timer('zone')
@@ -300,7 +298,6 @@ class NavCore:
 
         # PID 모드 전환
         self._nav_mode = 'PID'
-        self._pub_nav_mode('PID')
         self._cancel_timer('zone')
 
         if self._current_goal_handle is not None:
@@ -332,7 +329,6 @@ class NavCore:
             self.cmd_vel(0.0, 0.0)   # NavCore 모터 정지 (stop()은 서브클래스에서 override되므로 직접 호출)
             self._cancel_timer('pid')
             self._nav_mode = 'IDLE'
-            self._pub_nav_mode('IDLE')
             self._node.get_logger().info('[NavCore] PID 목표 도달')
             if self._nav_done_cb:
                 self._nav_done_cb(True)
@@ -720,6 +716,16 @@ class NavCore:
         self._occupied_poi_ids = (
             {int(x) for x in data.split(',') if x.strip()} if data else set()
         )
+
+    @property
+    def _nav_mode(self) -> str:
+        return getattr(self, '_nav_mode_value', 'IDLE')
+
+    @_nav_mode.setter
+    def _nav_mode(self, value: str):
+        self._nav_mode_value = value
+        if hasattr(self, '_nav_mode_pub'):
+            self._pub_nav_mode(value)
 
     def _pub_nav_mode(self, mode: str):
         msg = StringMsg()

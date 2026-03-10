@@ -173,12 +173,6 @@ class GuideExecutor(NavCore):
                 )
             with self._lock:
                 self._locked_zone_id = zone_id
-            # malle_service에 OCCUPIED 상태 직접 push → 다른 로봇이 occupied_poi_ids로 감지
-            try:
-                self._api.patch(f'/robots/{_ROBOT_ID}/state',
-                                {'nav_state': 'OCCUPIED'})
-            except Exception:
-                pass
 
         self.navigate_via_waypoints(
             target_x=x, target_y=y, target_yaw=0.0,
