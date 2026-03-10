@@ -134,6 +134,7 @@ class NavCore:
 
         self._current_goal_handle = None
         self._nav_abort = False
+        self._narrow_section_cb = None
 
         # 목표 상태
         self._nav_gen         = 0
@@ -414,7 +415,11 @@ class NavCore:
             )
 
             if wp_pid_r > 0.0:
+                if self._narrow_section_cb:
+                    self._narrow_section_cb(wp_id, 'acquire')
                 success = self._blocking_navigate_with_pid(wp["x"], wp["y"], 0.0, wp_pid_r)
+                if self._narrow_section_cb:
+                    self._narrow_section_cb(wp_id, 'release')
             else:
                 success = self._blocking_navigate(wp["x"], wp["y"], 0.0)
 

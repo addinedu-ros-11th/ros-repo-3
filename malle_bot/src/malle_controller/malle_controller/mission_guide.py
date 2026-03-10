@@ -52,6 +52,8 @@ class GuideExecutor(NavCore):
         self._lock = threading.Lock()
         self._locked_zone_id: int | None = None
 
+        self._narrow_section_cb = self._on_narrow_section
+
     # ── 외부 인터페이스 ──────────────────────────────────────────────────────
 
     def start(self, session_id: int, queue_items: list[dict]):
@@ -215,6 +217,49 @@ class GuideExecutor(NavCore):
                 self._log.warn(f'[GuideExecutor] SKIPPED 보고 실패: {e}')
 
         self._navigate_next()
+
+    def _on_narrow_section(self, wp_id: str, action: str):
+        """
+        좁은 구간(PID_EDGE) mutex 콜백.
+        action='acquire': pid_lock_{wp_id} zone이 비워질 때까지 대기 후 활성화.
+        action='release': 해당 zone 비활성화.
+        keepout mask는 ZoneManager → ZONE_UPDATED WS → /keepout_mask 발행으로 자동 반영.
+        """
+        zone_name = f'pid_lock_{wp_id}'
+        zone_id = self._api.find_pid_lock_zone_id(wp_id)
+        if not zone_id:
+            self._log.warn(f'[GuideExecutor] {zone_name} zone 없음 — mutex 스킵')
+            return
+
+        if action == 'acquire':
+            # 다른 로봇이 점유 중이면 해제될 때까지 대기
+            while True:
+                try:
+                    zones = self._api.get('/zones')
+                    zone = next((z for z in zones if z['id'] == zone_id), None)
+                    if zone and zone.get('is_active'):
+                        self._log.info(
+                            f'[GuideExecutor] {zone_name} 점유 중 — 대기...'
+                        )
+                        import time as _time
+                        _time.sleep(0.5)
+                        continue
+                except Exception as e:
+                    self._log.warn(f'[GuideExecutor] zone 상태 조회 실패: {e}')
+                # 비어있음 → 획득
+                try:
+                    self._api.set_zone_active(zone_id, True)
+                    self._log.info(f'[GuideExecutor] {zone_name} 획득 (zone_id={zone_id})')
+                except Exception as e:
+                    self._log.warn(f'[GuideExecutor] {zone_name} 획득 실패: {e}')
+                break
+
+        elif action == 'release':
+            try:
+                self._api.set_zone_active(zone_id, False)
+                self._log.info(f'[GuideExecutor] {zone_name} 해제 (zone_id={zone_id})')
+            except Exception as e:
+                self._log.warn(f'[GuideExecutor] {zone_name} 해제 실패: {e}')
 
     def _release_zone_lock(self):
         """현재 점유 중인 zone 비활성화."""
