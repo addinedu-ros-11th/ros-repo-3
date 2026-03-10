@@ -1,7 +1,7 @@
 <launch>
   <!-- ===== 공통 인수 ===== -->
-  <arg name="robot_id"        default="1"/>
-  <arg name="robot_ns"        default="malle_15"/>
+  <arg name="robot_id"/>
+  <arg name="robot_ns"/>
   <arg name="api_base_url"    default="http://localhost:8000/api/v1"/>
   <arg name="lockbox_iface"   default="mock"/>  <!-- mock | gpio | serial -->
 
