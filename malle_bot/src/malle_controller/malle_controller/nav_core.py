@@ -223,6 +223,7 @@ class NavCore:
         self._poi_id         = poi_id
         self._waiting_at_zone = False
         self._nav_mode       = 'NAV2'
+        self._pub_nav_mode('NAV2')
 
         goal = NavigateToPose.Goal()
         goal.pose = self._make_pose_stamped(x, y, yaw)
