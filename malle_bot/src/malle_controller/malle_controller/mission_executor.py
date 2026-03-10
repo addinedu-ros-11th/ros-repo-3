@@ -288,11 +288,9 @@ class MissionExecutor(Node, NavCore):
 
 
 def main():
-    import os
     rclpy.init()
     executor = MultiThreadedExecutor()
-    api_url = os.getenv('MALLE_SERVICE_URL', 'http://localhost:8000/api/v1')
-    executor.add_node(MissionExecutor(api_base_url=api_url))
+    executor.add_node(MissionExecutor())
 
     try:
         executor.spin()
