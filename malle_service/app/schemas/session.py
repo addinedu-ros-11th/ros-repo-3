@@ -12,6 +12,7 @@ class SessionCreateRequest(BaseModel):
     user_id: int
     session_type: SessionType
     requested_minutes: int | None = None  # TIME only
+    robot_id: int | None = None  # 강제 배정용 (테스트/관리자 전용)
 
 
 class SessionStatusUpdateRequest(BaseModel):

@@ -59,13 +59,35 @@ async def create_session(req: SessionCreateRequest, db: AsyncSession = Depends(g
         # 기존 세션 자동 종료
         await end_session_workflow(db, s, reason="superseded_by_new_session")
 
-    # 2) 새 세션 생성 + 자동 배정
-    session = await create_session_with_assignment(
-        db,
-        user_id=req.user_id,
-        session_type=req.session_type,
-        requested_minutes=req.requested_minutes,
-    )
+    # 2) 새 세션 생성 + 배정
+    if req.robot_id is not None:
+        # 강제 배정: robot_id 명시 시 해당 로봇으로 직접 배정
+        from app.models.robot import Robot
+        from datetime import timedelta
+        robot = await db.get(Robot, req.robot_id)
+        if not robot:
+            raise HTTPException(status_code=404, detail=f"Robot {req.robot_id} not found")
+        from app.services.session_workflow import _generate_pin
+        pin = _generate_pin()
+        session = Session(
+            user_id=req.user_id,
+            session_type=req.session_type,
+            requested_minutes=req.requested_minutes,
+            status=SessionStatus.ASSIGNED,
+            assigned_robot_id=req.robot_id,
+            match_pin=pin,
+            pin_expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+        )
+        db.add(session)
+        await db.flush()
+        await db.refresh(session)
+    else:
+        session = await create_session_with_assignment(
+            db,
+            user_id=req.user_id,
+            session_type=req.session_type,
+            requested_minutes=req.requested_minutes,
+        )
     return session
 
 
