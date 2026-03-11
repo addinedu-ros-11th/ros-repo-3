@@ -810,6 +810,17 @@ class NavCore:
                 )
                 continue
 
+            tag_z_col = tag.pose_R[:, 2]
+            face_angle_deg = abs(math.degrees(
+                math.atan2(float(tag_z_col[0]), float(tag_z_col[2]))
+            ))
+            if face_angle_deg > self._tag_corr_cfg['max_angle_deg']:
+                self._node.get_logger().debug(
+                    f'[NavCore] AprilTag ID:{tag.tag_id} 정면 아님 스킵 '
+                    f'(face_angle={face_angle_deg:.1f}°)'
+                )
+                continue
+
             curr_x, curr_y = self._get_current_position()
             if curr_x is None:
                 self._node.get_logger().warn('[NavCore] AprilTag 교정: TF 없음, 스킵')
