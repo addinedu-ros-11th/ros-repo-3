@@ -8,7 +8,7 @@
 대형 쇼핑몰 방문객들이 겪는 **매장 찾기의 어려움, 무거운 짐 이동, 최적 동선 부재** 등의 페인 포인트(Pain Points)를 해결하기 위해 기획되었습니다. `mall-E`는 자율주행, 객체 추종, 사용자 인터페이스를 결합하여 사용자에게 스마트한 쇼핑 경험을 제공합니다.
 
 - **개발 기간**: 2026. 02 ~ 2026. 03
-- **개발 환경**: Ubuntu 22.04, ROS 2 Humble, C++, Python
+- **개발 환경**: Ubuntu 22.04, ROS 2 Jazzy, C++, Python
 - **팀명**: MALL-STERS (ROS 2 11기 Final Project 3팀)
 
 ## ✨ 주요 기능
@@ -35,7 +35,7 @@
 | Category | Tech Stack |
 | :--- | :--- |
 | **O.S.** | Linux ubuntu 24.04 |
-| **Framework** | ROS 2 jazzy |
+| **Framework** | ROS 2 Jazzy |
 | **Language** | C++, Python |
 | **Navigation** | NAV2, SLAM Toolbox, AMCL |
 | **Perception** | OpenCV, MediaPipe, Depth Camera, AprilTag |
@@ -44,19 +44,11 @@
 
 ## 👥 팀원 소개 및 역할 (Our Crew)
 
-| 이름 | 역할 (Role) | 주요 구현 내용 |
-| :--- | :--- | :--- |
-| **이가람** | **SLAM / NAV2** | SLAM 맵빌딩, NAV2 파라미터 튜닝, Path Planning 알고리즘 비교 연구 |
-| **김용준** | **Navigation / Control** | April Tag 추종 주행, 맵 설계, IR 센서 라인트래킹, 스테이션 태그 파킹, 비전 장애물 회피 |
-| **양효인** | **System / Nav** | POI 설계, 도착 지점 좌표 오차 보정, 태그 파킹, 락박스 설계 및 코딩 |
-| **용도원** | **FMS / GUI** | 기획, GUI 빌드, 서버 구현, 로봇 Command&Control, 데이터 설계, SLAM 맵빌딩 |
-| **전민재** | **Control / Nav** | PID 제어, NAV2 튜닝, 통신 설계, AMCL 보정, Waypoint 설계 및 적용 |
-| **홍성민** | **Perception / Control** | Depth Cam 객체인식, 추종 주행 구현, MediaPipe 제어, 음성 명령 제어, Gazebo 시뮬레이션 |
-
-## 🚀 시작하기
-
-### 1. 워크스페이스 빌드
-```bash
-cd ~/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
+| 이름   | 주요 구현 내용 |
+| :--- | :--- |
+| **이가람** | 팀장, 기획, GUI 빌드, 서버 구현, 로봇 Command&Control, 데이터 설계, SLAM 맵빌딩 |
+| **김용준** | NAV2 최적화, 파라미터 튜닝, Path Planning 알고리즘 비교 연구, Waypoint 설계 및 적용 |
+| **양효인** | PID 제어, NAV2 튜닝, 통신 설계, AMCL 보정, Waypoint 설계 및 적용 |
+| **용도원** | April Tag 추종 주행, 맵 설계, IR 센서 라인트래킹, 스테이션 태그 파킹, 비전 장애물 회피 |
+| **전민재** | SLAM 맵빌딩, POI 설계, 도착 지점 좌표 오차 보정, 태그 파킹, 락박스 설계 |
+| **홍성민** | Depth Cam 객체인식, 추종 주행 구현, MediaPipe 제어, 음성 명령 제어, Gazebo 시뮬레이션 |
